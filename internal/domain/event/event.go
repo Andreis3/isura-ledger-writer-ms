@@ -2,6 +2,12 @@ package event
 
 import "context"
 
+type Type string
+
+const (
+	CreatedBalance Type = "created_balance"
+)
+
 // Event define o contrato que todo evento de domínio precisa cumprir
 type Event interface {
 	SubjectName() string

@@ -6,6 +6,7 @@ import (
 
 	"github.com/andreis3/isura-ledger-ms/internal/domain/fault"
 	"github.com/andreis3/isura-ledger-ms/internal/transport/rest/translator"
+	"github.com/andreis3/isura-ledger-ms/internal/util"
 	"github.com/bytedance/sonic"
 )
 
@@ -43,5 +44,5 @@ func ResponseError(write http.ResponseWriter, err error) {
 		FriendlyMessage: "Internal server error",
 	}
 
-	_ = jsonEngine.NewEncoder(write).Encode(result)
+	_ = util.JsonEngine.NewEncoder(write).Encode(result)
 }

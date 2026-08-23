@@ -8,9 +8,9 @@ import (
 	"github.com/andreis3/isura-ledger-ms/internal/application"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/configs"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/logger"
+	"github.com/andreis3/isura-ledger-ms/internal/infra/nats"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/observability"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/postgres"
-	"github.com/andreis3/isura-ledger-ms/internal/infra/queue/nats"
 )
 
 type BaseDeps struct {
@@ -49,7 +49,7 @@ func BuildBaseDeps() *BaseDeps {
 		os.Exit(1)
 	}
 
-	nats, err := nats.NewJetStreamConnection(cfg.Nats.URL)
+	nats, err := nats.NewJetStreamConnection(cfg)
 	if err != nil {
 		log.CriticalText("failed to connect to nats", slog.String("error", err.Error()))
 		os.Exit(1)

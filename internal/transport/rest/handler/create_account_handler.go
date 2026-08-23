@@ -28,24 +28,22 @@ func NewCreateAccountHandler(
 }
 
 func (h *CreateAccountHandler) Handle(w http.ResponseWriter, r *http.Request) {
-	{
-		ctx, span := h.tracer.Start(r.Context(), "CreateAccountHandler.Handle")
+	ctx, span := h.tracer.Start(r.Context(), "CreateAccountHandler.Handle")
 
-		input, err := decoder.RequestDecoder[dto.CreateAccountInput](r)
-		if err != nil {
-			span.RecordError(err)
-			decoder.ResponseError(w, err)
-			return
-		}
-
-		response, err := h.useCase.Execute(ctx, input)
-		if err != nil {
-			span.RecordError(err)
-			decoder.ResponseError(w, err)
-			return
-		}
-
-		decoder.ResponseSuccess[dto.CreateAccountOutput](w, http.StatusCreated, *response)
+	input, err := decoder.RequestDecoder[dto.CreateAccountInput](r)
+	if err != nil {
+		span.RecordError(err)
+		decoder.ResponseError(w, err)
+		return
 	}
+
+	response, err := h.useCase.Execute(ctx, input)
+	if err != nil {
+		span.RecordError(err)
+		decoder.ResponseError(w, err)
+		return
+	}
+
+	decoder.ResponseSuccess[dto.CreateAccountOutput](w, http.StatusCreated, *response)
 
 }

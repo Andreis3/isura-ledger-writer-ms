@@ -16,7 +16,7 @@ import (
 
 type CreateAccount struct {
 	accountRepository account.Repository
-	natsPublihser     event.Publisher
+	natsPublisher     event.Publisher
 	log               application.Logger
 	tracer            application.Tracer
 	metrics           application.Metrics
@@ -24,14 +24,14 @@ type CreateAccount struct {
 
 func NewCreateAccount(
 	accountRepository account.Repository,
-	natsPublihser event.Publisher,
+	natsPublisher event.Publisher,
 	log application.Logger,
 	tracer application.Tracer,
 	metrics application.Metrics,
 ) *CreateAccount {
 	return &CreateAccount{
 		accountRepository: accountRepository,
-		natsPublihser:     natsPublihser,
+		natsPublisher:     natsPublisher,
 		log:               log,
 		tracer:            tracer,
 		metrics:           metrics,
@@ -120,9 +120,9 @@ func (c *CreateAccount) Execute(ctx context.Context, input dto.CreateAccountInpu
 		slog.String("account_external_id", accountEntity.AccountExternalID),
 	)
 
-	eventAccount := account.NewAccountCreatedEvent(accountEntity.ID.String(), string(accountEntity.Currency))
+	eventAccount := event.NewCreateBalanceEvent(accountEntity.ID.String(), string(accountEntity.Currency))
 
-	err = c.natsPublihser.Publish(ctx, eventAccount)
+	err = c.natsPublisher.Publish(ctx, eventAccount)
 	if err != nil {
 		c.log.CriticalJSON("CreateAccount failed to publish",
 			append([]any{

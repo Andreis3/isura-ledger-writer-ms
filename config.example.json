@@ -10,8 +10,18 @@
     }
   },
   "nats": {
-    "url": "xxxx",
-    "stream_name": "isura-ledger"
+    "url": "nats://localhost:4222",
+    "name": "LEDGER_EVENTS",
+    "subject": "ledger.writer.event",
+    "consumer": {
+      "stream": "LEDGER_EVENTS",
+      "name": "isura-ledger-writer-event",
+      "durable": "isura-ledger-writer-event",
+      "ask_wait_seconds": 30,
+      "max_deliver": 5,
+      "max_workers": 100,
+      "max_message_size": 100
+    }
   },
   "data_base": {
     "postgres": {

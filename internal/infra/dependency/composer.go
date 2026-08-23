@@ -6,9 +6,9 @@ import (
 	"github.com/andreis3/isura-ledger-ms/internal/domain/event"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/outbox"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/transaction"
+	"github.com/andreis3/isura-ledger-ms/internal/infra/nats"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/postgres/repository"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/postgres/repository/observability"
-	"github.com/andreis3/isura-ledger-ms/internal/infra/queue/nats"
 )
 
 type Composer struct {
@@ -54,5 +54,5 @@ func (c *Composer) BuildBalance() balance.Repository {
 }
 
 func (c *Composer) BuildNatsPublisher() event.Publisher {
-	return nats.NewJetStreamPublisher(c.deps.Nats.JS)
+	return nats.NewJetStreamPublisher(c.deps.Nats.JS, c.deps.Tracer)
 }
