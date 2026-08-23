@@ -4,6 +4,7 @@ import (
 	"strings"
 )
 
+// AccountCriteria define os filtros e opções de lock para consultas de contas
 type AccountCriteria struct {
 	ID                   *string
 	AccountExternalID    *string
@@ -11,15 +12,17 @@ type AccountCriteria struct {
 	AccountNumber        *string
 	Currency             *string
 	Type                 *string
-	HasForUpdateSkipLock bool
+	HasForUpdate         bool // Bloqueio pessimista tradicional (aguarda a liberação do registo)
+	HasForUpdateSkipLock bool // Bloqueio que ignora registos já bloqueados (uso restrito)
 }
 
+// GetAccountCriteria constrói dinamicamente a query SQL e os argumentos para a tabela accounts
 func GetAccountCriteria(baseQuery string, params AccountCriteria) (string, []any) {
-	// Pre-allocates the slice with the maximum capacity of arguments (5 filters + slack)
+	// Pré-aloca o slice com a capacidade máxima estimada de argumentos (filtros + folga)
 	args := make([]any, 0, 7)
 	argCount := 1
 
-	// Estimates the approximate size of the query to avoid reallocations in the Builder
+	// Estima o tamanho aproximado da query no Builder para otimizar alocações de memória
 	var sb strings.Builder
 	sb.Grow(len(baseQuery) + 128)
 	sb.WriteString(baseQuery)
@@ -66,7 +69,10 @@ func GetAccountCriteria(baseQuery string, params AccountCriteria) (string, []any
 		argCount++
 	}
 
-	if params.HasForUpdateSkipLock {
+	// Adiciona a diretiva correta de bloqueio pessimista ao final da query
+	if params.HasForUpdate {
+		sb.WriteString(" FOR UPDATE")
+	} else if params.HasForUpdateSkipLock {
 		sb.WriteString(" FOR UPDATE SKIP LOCKED")
 	}
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/andreis3/isura-ledger-ms/internal/application"
@@ -108,8 +109,8 @@ func (c *CreateTransaction) Execute(ctx context.Context, input dto.CreateTransac
 		// 2. Search with SELECT FOR UPDATE from TX
 		// Here we guarantee that the balance read is the "last truth" and no one touches it until the commit
 		_, err := c.accountRepository.FindAccount(ctxTx, criteria.AccountCriteria{
-			AccountExternalID:    firstID,
-			HasForUpdateSkipLock: true,
+			AccountExternalID: firstID,
+			HasForUpdate:      true,
 		})
 		if err != nil {
 			span.RecordError(err)
@@ -117,8 +118,8 @@ func (c *CreateTransaction) Execute(ctx context.Context, input dto.CreateTransac
 		}
 
 		_, err = c.accountRepository.FindAccount(ctxTx, criteria.AccountCriteria{
-			AccountExternalID:    secondID,
-			HasForUpdateSkipLock: true,
+			AccountExternalID: secondID,
+			HasForUpdate:      true,
 		})
 		if err != nil {
 			span.RecordError(err)
@@ -187,6 +188,11 @@ func (c *CreateTransaction) Execute(ctx context.Context, input dto.CreateTransac
 				entry.AddAccountID(creditAccount.ID.String())
 			}
 		}
+
+		// 4. Ordenação rigorosa das entries usando o ID interno para alinhar com a FK do Postgres
+		sort.Slice(entityTransaction.Entries, func(i, j int) bool {
+			return entityTransaction.Entries[i].AccountID < entityTransaction.Entries[j].AccountID
+		})
 
 		err = c.transactionRepository.Save(ctxTx, entityTransaction)
 		if err != nil {

@@ -4,13 +4,15 @@ DOCKER_COMPOSE = docker compose
 SERVICE_NAME = ledger
 DB_URL  = postgres://admin:admin@localhost:5432/isura_ledger_main?sslmode=disable
 SCHEMA_DIR = db
+
 # ── Variáveis de Teste de Carga (Vegeta) ─────────────────────
- PATH_VEGETA ?= ./vegeta/account/create_account.go
- URL         ?= http://localhost:8080/accounts
- DURATION    ?= 60s
- RATE        ?= 1000
- CONNECTIONS ?= 5000
- WORKERS     ?= 500
+PATH_VEGETA ?= ./vegeta/account/create_account.go
+PATH_SEED   ?= ./vegeta/transaction/seed_accounts.go
+URL         ?= http://localhost:8080/accounts
+DURATION    ?= 60s
+RATE        ?= 1000
+CONNECTIONS ?= 5000
+WORKERS     ?= 500
 
 help:
 	@echo "======================================================================"
@@ -78,6 +80,14 @@ unit-report:
 	&& go tool cover -func=coverage/cover.out -o coverage/cover.functions.html
 
 test-load:
+	@if echo "$(PATH_VEGETA)" | grep -q "transaction"; then \
+		if [ ! -f accounts_pool.json ]; then \
+			echo "📦 'accounts_pool.json' não encontrado. A gerar o pool de 1000 contas automaticamente..."; \
+			go run $(PATH_SEED) -count=1000; \
+		else \
+			echo "📂 Pool de contas detetado (accounts_pool.json). A saltar a fase de seed."; \
+		fi; \
+	fi
 	@echo "🚀 Iniciando teste de carga estável ($(RATE) req/s) usando $(PATH_VEGETA)..."
 	go run $(PATH_VEGETA) -rate=$(RATE) -connections=$(CONNECTIONS) -workers=$(WORKERS) -duration=$(DURATION) -url=$(URL)
 

@@ -127,6 +127,7 @@ func (r *TransactionRepository) Find(ctx context.Context, params criteria.Transa
 		&transactionModel.IdempotencyKey,
 		&transactionModel.Status,
 		&transactionModel.Amount,
+		&transactionModel.Operation,
 		&transactionModel.Currency,
 		&transactionModel.CreatedAt,
 		&transactionModel.UpdatedAt,
