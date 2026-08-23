@@ -28,24 +28,22 @@ func NewCreateTransactionHandler(
 }
 
 func (h *CreateTransactionHandler) Handle(w http.ResponseWriter, r *http.Request) {
-	{
-		ctx, span := h.tracer.Start(r.Context(), "CreateTransactionHandler.Handle")
+	ctx, span := h.tracer.Start(r.Context(), "CreateTransactionHandler.Handle")
 
-		input, err := decoder.RequestDecoder[dto.CreateTransactionInput](r)
-		if err != nil {
-			span.RecordError(err)
-			decoder.ResponseError(w, err)
-			return
-		}
-
-		response, err := h.useCase.Execute(ctx, input)
-		if err != nil {
-			span.RecordError(err)
-			decoder.ResponseError(w, err)
-			return
-		}
-
-		decoder.ResponseSuccess[dto.CreateTransactionOutput](w, http.StatusCreated, *response)
+	input, err := decoder.RequestDecoder[dto.CreateTransactionInput](r)
+	if err != nil {
+		span.RecordError(err)
+		decoder.ResponseError(w, err)
+		return
 	}
+
+	response, err := h.useCase.Execute(ctx, input)
+	if err != nil {
+		span.RecordError(err)
+		decoder.ResponseError(w, err)
+		return
+	}
+
+	decoder.ResponseSuccess[dto.CreateTransactionOutput](w, http.StatusCreated, *response)
 
 }

@@ -3,11 +3,12 @@ package factory
 import (
 	"github.com/andreis3/isura-ledger-ms/internal/application/command"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/dependency"
+	"github.com/andreis3/isura-ledger-ms/internal/transport/queue/handler"
 )
 
 func NewCreateBalanceFactory(
 	baseDeps *dependency.BaseDeps,
-) *command.CreateBalance {
+) *handler.CreateBalanceHandler {
 	composeBuild := dependency.NewComposer(baseDeps)
 	balanceCommand := command.NewCreateBalance(
 		composeBuild.BuildBalance(),
@@ -17,5 +18,7 @@ func NewCreateBalanceFactory(
 		baseDeps.Prom,
 	)
 
-	return balanceCommand
+	handler := handler.NewCreateBalanceHandler(balanceCommand, baseDeps.Log, baseDeps.Tracer)
+
+	return handler
 }

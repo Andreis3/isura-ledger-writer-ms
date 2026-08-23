@@ -36,7 +36,7 @@ type Money struct {
 
 func NewMoney(amount int64, currency Currency) (Money, error) {
 	var fieldsErrors = make(map[string]any)
-	if amount <= 0 {
+	if amount < 0 {
 		fieldsErrors["amount"] = "amount must be greater than zero"
 
 	}

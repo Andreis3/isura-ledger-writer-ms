@@ -9,14 +9,21 @@ import (
 	"time"
 
 	"github.com/andreis3/isura-ledger-ms/internal/infra/dependency"
-	"github.com/andreis3/isura-ledger-ms/internal/transport/queue/handler"
 	"golang.org/x/sync/errgroup"
 )
 
-func StartServersWithGracefulShutdown(grpcSrv *GRPCServer,
-	httpSrv *HTTPServer,
-	accountConsumer *handler.AccountConsumer,
-	deps *dependency.BaseDeps) {
+func StartServersWithGracefulShutdown(deps *dependency.BaseDeps) {
+	// Inicializa o composer para centralizar a criação de dependências de infra/domínio
+	composer := dependency.NewComposer(deps)
+
+	// Constrói o publisher usando o método padronizado do projeto
+	natsPublisher := composer.BuildNatsPublisher()
+
+	grpcSrv := NewGRPCServer(deps)
+	httpSrv := NewHTTPServer(deps)
+
+	natsConsumer := NewNatsConsumerServer(deps, natsPublisher)
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -50,7 +57,7 @@ func StartServersWithGracefulShutdown(grpcSrv *GRPCServer,
 	g.Go(func() error {
 		errCh := make(chan error, 1)
 		go func() {
-			deps.Log.InfoText("Starting gRPC server...")
+			deps.Log.InfoText("Starting GRPC server...")
 			if err := grpcSrv.Start(); err != nil {
 				errCh <- err
 			}
@@ -59,7 +66,7 @@ func StartServersWithGracefulShutdown(grpcSrv *GRPCServer,
 
 		select {
 		case <-ctx.Done():
-			deps.Log.InfoText("Shutting down gRPC server...")
+			deps.Log.InfoText("Shutting down GRPC server...")
 			grpcSrv.GracefulStop()
 			return nil
 		case err := <-errCh:
@@ -69,9 +76,19 @@ func StartServersWithGracefulShutdown(grpcSrv *GRPCServer,
 
 	// Goroutine for the NATS Consumer worker
 	g.Go(func() error {
-		deps.Log.InfoText("Starting NATS AccountConsumer worker...")
-		// O próprio Start vai escutar o ctx.Done() do errgroup para fechar limpo
-		return accountConsumer.Start(ctx)
+		errCh := make(chan error, 1)
+		go func() {
+			deps.Log.InfoText("Starting NATS consumer...")
+			if err := natsConsumer.Start(ctx); err != nil {
+				errCh <- err
+			}
+		}()
+
+		select {
+		case <-ctx.Done():
+			deps.Log.InfoText("Shutting down NATS consumer...")
+			return nil
+		}
 	})
 
 	// Waits for all to finish
@@ -86,6 +103,7 @@ func StartServersWithGracefulShutdown(grpcSrv *GRPCServer,
 	deps.Pg.Close()
 	deps.Prom.Close()
 	deps.TracerShutdown(closeCtx)
+	deps.Nats.Close()
 	deps.Log.InfoText("Infrastructure closed.")
 	deps.Log.InfoText("Shutdown complete.")
 }

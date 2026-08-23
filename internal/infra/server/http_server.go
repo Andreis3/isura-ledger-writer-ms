@@ -61,7 +61,5 @@ func (s *HTTPServer) Shutdown(ctx context.Context) error {
 			slog.String("error", err.Error()))
 		return err
 	}
-
-	s.deps.Log.InfoText("http server stopped")
 	return nil
 }

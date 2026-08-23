@@ -40,8 +40,20 @@ type OpemTelemetry struct {
 }
 
 type Nats struct {
-	URL        string `mapstructure:"url"`
-	StreamName string `mapstructure:"stream_name"`
+	URL      string       `mapstructure:"url"`
+	Name     string       `mapstructure:"name"`
+	Subject  string       `mapstructure:"subject"`
+	Consumer NatsConsumer `mapstructure:"consumer"`
+}
+
+type NatsConsumer struct {
+	Stream         string        `mapstructure:"stream"`
+	Name           string        `mapstructure:"name"`
+	Durable        string        `mapstructure:"durable"`
+	AskWaitSeconds time.Duration `mapstructure:"ask_wait_seconds"`
+	MaxDelivery    int           `mapstructure:"max_delivery"`
+	MaxWorkers     int           `mapstructure:"max_workers"`
+	MaxMessageSize int           `mapstructure:"max_message_size"`
 }
 type Postgres struct {
 	Host            string        `mapstructure:"host"`
@@ -101,5 +113,13 @@ func bindEnvs() {
 	_ = viper.BindEnv("data_base.postgres.max_conn_idle_time", "POSTGRES_MAX_CONN_IDLE_TIME")
 	_ = viper.BindEnv("open_telemetry.host", "OTEL_HOST")
 	_ = viper.BindEnv("nats.url", "NATS_URL")
-	_ = viper.BindEnv("nats.stream_name", "NATS_STREAM_NAME")
+	_ = viper.BindEnv("nats.name", "NATS_NAME")
+	_ = viper.BindEnv("nats.subject", "NATS_SUBJECT")
+	_ = viper.BindEnv("nats.consumer.stream", "NATS_CONSUMER_STREAM")
+	_ = viper.BindEnv("nats.consumer.name", "NATS_CONSUMER_NAME")
+	_ = viper.BindEnv("nats.consumer.durable", "NATS_CONSUMER_DURABLE")
+	_ = viper.BindEnv("nats.consumer.ask_wait_seconds", "NATS_CONSUMER_AKS_WAIT_SECONDS")
+	_ = viper.BindEnv("nats.consumer.max_deliver", "NATS_CONSUMER_MAX_DELIVERY")
+	_ = viper.BindEnv("nats.consumer.max_workers", "NATS_CONSUMER_MAX_WORKERS")
+	_ = viper.BindEnv("nats.cocnsumer.MaxMessageSize", "NATS_CONSUMER_MAX_MESSAGE_SIZE")
 }
