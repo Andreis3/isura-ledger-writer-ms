@@ -12,11 +12,13 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-func StartServersWithGracefulShutdown(deps *dependency.BaseDeps) {
-	// Inicializa o composer para centralizar a criação de dependências de infra/domínio
+func StartServersWithGracefulShutdown() {
+	deps := dependency.BuildBaseDeps()
+
+	// Initializes the composer to centralize the creation of infra/domain dependencies
 	composer := dependency.NewComposer(deps)
 
-	// Constrói o publisher usando o método padronizado do projeto
+	// Builds the publisher using the project's standardized method
 	natsPublisher := composer.BuildNatsPublisher()
 
 	grpcSrv := NewGRPCServer(deps)

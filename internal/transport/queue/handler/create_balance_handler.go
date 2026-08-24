@@ -46,5 +46,5 @@ func (h *CreateBalanceHandler) Handle(ctx context.Context, msg jetstream.Msg) er
 		return queue.NewTransientError(err, 10*time.Second, false)
 	}
 
-	return nil // O NatsConsumerServer trata o Ack() em caso de sucesso
+	return nil // NatsConsumerServer handles Ack() on success
 }

@@ -53,7 +53,9 @@ func (c *CreateTransaction) Execute(ctx context.Context, input dto.CreateTransac
 	ctx, span := c.tracer.Start(ctx, "CreateTransaction.Execute")
 	tracerID := span.SpanContext().TraceID()
 	defer span.End()
-	defer c.metrics.RecordCommandDuration("CreateTransaction.Execute", float64(time.Since(start).Milliseconds()))
+	defer func() {
+		c.metrics.RecordCommandDuration("CreateTransaction.Execute", float64(time.Since(start).Milliseconds()))
+	}()
 
 	c.log.InfoJSON("CreateTransaction received request",
 		slog.String("trace_id", tracerID),
@@ -189,7 +191,7 @@ func (c *CreateTransaction) Execute(ctx context.Context, input dto.CreateTransac
 			}
 		}
 
-		// 4. Ordenação rigorosa das entries usando o ID interno para alinhar com a FK do Postgres
+		// 4. Strict sorting of entries using the internal ID to align with Postgres FK
 		sort.Slice(entityTransaction.Entries, func(i, j int) bool {
 			return entityTransaction.Entries[i].AccountID < entityTransaction.Entries[j].AccountID
 		})

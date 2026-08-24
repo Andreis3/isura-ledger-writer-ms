@@ -37,12 +37,12 @@ func NewJetStreamConnection(cfg *configs.Configs) (*ClientNats, error) {
 
 func SetupStreams(ctx context.Context, js jetstream.JetStream, cfg *configs.Configs) error {
 	_, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
-		Name:      cfg.Nats.Name,              // Nome padronizado com o Consumer
-		Subjects:  []string{cfg.Nats.Subject}, // Captura qualquer evento que comece com ledger.
-		Storage:   jetstream.FileStorage,      // Persiste em disco
+		Name:      cfg.Nats.Name,              // Standardized name matching the Consumer
+		Subjects:  []string{cfg.Nats.Subject}, // Captures any event matching the configured subject
+		Storage:   jetstream.FileStorage,      // Persists on disk
 		Retention: jetstream.LimitsPolicy,
 		MaxAge:    7 * 24 * time.Hour,
-		Replicas:  1, // 1 réplica para ambiente local/Docker (evita erro de cluster)
+		Replicas:  1, // 1 replica for local/Docker environment (avoids cluster error)
 		Discard:   jetstream.DiscardOld,
 	})
 	if err != nil {

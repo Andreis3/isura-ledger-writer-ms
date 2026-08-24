@@ -22,7 +22,7 @@ import (
 const (
 	DefaultRetryDelay = 5 * time.Second
 	MaxBackoffDelay   = 30 * time.Second
-	BackoffBase       = 2.0 // Base para o cálculo do backoff exponencial
+	BackoffBase       = 2.0 // Base for exponential backoff calculation
 )
 
 type EventEnvelope struct {
@@ -37,13 +37,13 @@ type ConsumerMetrics struct {
 
 type NatsConsumerServer struct {
 	dep        *dependency.BaseDeps
-	publisher  event.Publisher // Publisher injetado para uso em DLQ ou reenvio
+	publisher  event.Publisher // Injected publisher for DLQ or resend usage
 	maxWorkers int
 	semaphore  chan struct{}
 	metrics    *ConsumerMetrics
 }
 
-// NewNatsConsumerServer atualizado para receber o event.Publisher por parâmetro
+// NewNatsConsumerServer creates a new instance with injected dependencies and event.Publisher
 func NewNatsConsumerServer(baseDeps *dependency.BaseDeps, publisher event.Publisher) *NatsConsumerServer {
 	return &NatsConsumerServer{
 		dep:        baseDeps,
@@ -68,7 +68,7 @@ func (c *NatsConsumerServer) Start(ctx context.Context) error {
 			go func() {
 				defer func() { <-c.semaphore }()
 
-				// Extração de tracing preservando o contexto principal para graceful shutdown
+				// Extract tracing while preserving the main context for graceful shutdown
 				msgCtx := otel.GetTextMapPropagator().Extract(ctx, propagation.HeaderCarrier(msg.Headers()))
 
 				c.processJob(msgCtx, msg)
@@ -90,7 +90,7 @@ func (c *NatsConsumerServer) Start(ctx context.Context) error {
 	<-ctx.Done()
 	cc.Stop()
 
-	// Registo das métricas finais
+	// Record final metrics
 	c.dep.Log.InfoText("Consumer metrics",
 		slog.Int64("processed", c.metrics.processedCount.Load()),
 		slog.Int64("errors", c.metrics.errorCount.Load()),
@@ -132,42 +132,42 @@ func (c *NatsConsumerServer) processJob(ctx context.Context, msg jetstream.Msg) 
 
 		metadata, metaErr := msg.Metadata()
 
-		// 1. Verifica se o erro é permanente ou se excedeu o limite máximo de entregas
+		// 1. Check if error is permanent or if it exceeded the maximum delivery limit
 		maxDeliveries := uint64(c.dep.Cfg.Nats.Consumer.MaxDelivery)
 		if _, ok := errors.AsType[*queue.PermanentError](err); ok || (metaErr == nil && metadata.NumDelivered >= maxDeliveries) {
 			_ = msg.Term()
 			return
 		}
 
-		// 2. Determina o delay com base na política do erro temporário ou cálculo exponencial
+		// 2. Determine delay based on transient error policy or exponential backoff calculation
 		delay := DefaultRetryDelay
 
 		if transErr, ok := errors.AsType[*queue.TransientError](err); ok {
 			delay = transErr.Delay
 
-			// Se o handler solicitou explicitamente o envio para DLQ através do TransientError
+			// If handler explicitly requested sending to DLQ via TransientError
 			if transErr.SendToDLQ {
 				c.dep.Log.ErrorJSON("Message marked for DLQ, publishing to dead letter subject",
 					"subject", msg.Subject(),
 					"error", err.Error(),
 				)
 
-				// 1. Cria o evento de Dead Letter encapsulando o subject original e os dados
+				// 1. Create Dead Letter event encapsulating original subject and data
 				dlqEvent := event.NewDeadLetterEvent(msg.Subject(), msg.Data())
 
-				// 2. Publica o evento no broker antes de descartar a mensagem atual
+				// 2. Publish event to broker before discarding current message
 				if pubErr := c.publisher.Publish(ctx, dlqEvent); pubErr != nil {
 					c.dep.Log.ErrorJSON("Failed to publish message to Dead Letter Queue", "error", pubErr.Error())
-					// Mesmo que a publicação na DLQ falhe, ainda queremos terminar a mensagem
-					// para evitar um ciclo infinito, mas registamos o erro crítico.
+					// Even if DLQ publishing fails, we still want to terminate the message
+					// to avoid an infinite loop, but log the critical error.
 				}
 
-				// 3. Termina a mensagem original no JetStream
+				// 3. Terminate original message in JetStream
 				_ = msg.Term()
 				return
 			}
 		} else if metaErr == nil {
-			// Backoff exponencial limpo utilizando a constante BackoffBase
+			// Exponential backoff using the BackoffBase constant
 			delay = time.Duration(math.Pow(BackoffBase, float64(metadata.NumDelivered))) * time.Second
 			if delay > MaxBackoffDelay {
 				delay = MaxBackoffDelay

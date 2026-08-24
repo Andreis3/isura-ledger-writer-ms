@@ -33,17 +33,17 @@ func (p *Publisher) Publish(ctx context.Context, event event.Event) error {
 		return err
 	}
 
-	// Cria a mensagem NATS suportando headers
+	// Creates the NATS message supporting headers
 	msg := &nats.Msg{
 		Subject: event.SubjectName(),
 		Data:    payload,
 		Header:  make(nats.Header),
 	}
 
-	// Injeta o trace_id e spans atuais (do HTTP) nos headers do NATS
+	// Injects the current trace_id and spans (from HTTP) into the NATS headers
 	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(msg.Header))
 
-	// Publica a mensagem com os headers embutidos
+	// Publishes the message with embedded headers
 	_, err = p.js.PublishMsg(ctx, msg)
 	if err != nil {
 		return err
