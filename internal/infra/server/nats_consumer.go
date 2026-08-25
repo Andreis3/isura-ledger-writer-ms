@@ -156,7 +156,7 @@ func (c *NatsConsumerServer) processJob(ctx context.Context, msg jetstream.Msg) 
 				dlqEvent := event.NewDeadLetterEvent(msg.Subject(), msg.Data())
 
 				// 2. Publish event to broker before discarding current message
-				if pubErr := c.publisher.Publish(ctx, dlqEvent); pubErr != nil {
+				if pubErr := c.publisher.Publish(workerCtx, dlqEvent); pubErr != nil {
 					c.dep.Log.ErrorJSON("Failed to publish message to Dead Letter Queue", "error", pubErr.Error())
 					// Even if DLQ publishing fails, we still want to terminate the message
 					// to avoid an infinite loop, but log the critical error.
@@ -167,11 +167,7 @@ func (c *NatsConsumerServer) processJob(ctx context.Context, msg jetstream.Msg) 
 				return
 			}
 		} else if metaErr == nil {
-			// Exponential backoff using the BackoffBase constant
-			delay = time.Duration(math.Pow(BackoffBase, float64(metadata.NumDelivered))) * time.Second
-			if delay > MaxBackoffDelay {
-				delay = MaxBackoffDelay
-			}
+			delay = backoffDelay(metadata.NumDelivered)
 		}
 
 		_ = msg.NakWithDelay(delay)
@@ -190,17 +186,21 @@ func (c *NatsConsumerServer) dispatch(ctx context.Context, msg jetstream.Msg) er
 
 	switch envelope.Type {
 	case event.CreatedBalance:
-		h := factory.NewCreateBalanceFactory(c.dep)
-		return h.Handle(ctx, msg)
+		return factory.NewCreateBalanceFactory(c.dep).Handle(ctx, msg)
 
 	default:
 		return fmt.Errorf("unsupported event type: %s", envelope.Type)
 	}
 }
 
-func max(a, b int64) int64 {
-	if a > b {
-		return a
+// backoffDelay returns the exponential backoff delay for a delivery attempt,
+// capped at MaxBackoffDelay. The cap is applied in float seconds, before the
+// conversion to time.Duration, so a large NumDelivered cannot overflow the
+// underlying int64 and produce a negative delay.
+func backoffDelay(numDelivered uint64) time.Duration {
+	seconds := math.Pow(BackoffBase, float64(numDelivered))
+	if seconds >= MaxBackoffDelay.Seconds() {
+		return MaxBackoffDelay
 	}
-	return b
+	return time.Duration(seconds * float64(time.Second))
 }
