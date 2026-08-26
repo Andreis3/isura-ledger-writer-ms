@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
-	"sync/atomic"
 	"time"
 
 	"github.com/andreis3/isura-ledger-ms/internal/domain/event"
@@ -30,17 +29,11 @@ type eventEnvelope struct {
 	Type event.Type `json:"type"`
 }
 
-type consumerMetrics struct {
-	processedCount atomic.Int64
-	errorCount     atomic.Int64
-}
-
 type NatsConsumerServer struct {
 	dep        *dependency.BaseDeps
 	publisher  event.Publisher
 	maxWorkers int
 	semaphore  chan struct{}
-	metrics    *consumerMetrics
 	handlers   map[event.Type]types.QueueHandler
 }
 
@@ -56,7 +49,6 @@ func NewNatsConsumerServer(baseDeps *dependency.BaseDeps, publisher event.Publis
 		publisher:  publisher,
 		maxWorkers: maxW,
 		semaphore:  make(chan struct{}, maxW),
-		metrics:    &consumerMetrics{},
 		// Optimization: Handler cache
 		handlers: map[event.Type]types.QueueHandler{
 			event.CreatedBalance: factory.NewCreateBalanceFactory(baseDeps),
@@ -121,11 +113,6 @@ func (c *NatsConsumerServer) Start(ctx context.Context) error {
 		}
 	}
 
-	c.dep.Log.InfoText("Consumer metrics",
-		slog.Int64("processed", c.metrics.processedCount.Load()),
-		slog.Int64("errors", c.metrics.errorCount.Load()),
-	)
-
 	return nil
 }
 
@@ -149,7 +136,6 @@ func (c *NatsConsumerServer) processJob(ctx context.Context, msg jetstream.Msg) 
 
 	err := c.dispatch(workerCtx, msg)
 	if err != nil {
-		c.metrics.errorCount.Add(1)
 
 		span.RecordError(err)
 
@@ -196,7 +182,6 @@ func (c *NatsConsumerServer) processJob(ctx context.Context, msg jetstream.Msg) 
 		return
 	}
 
-	c.metrics.processedCount.Add(1)
 	_ = msg.Ack()
 }
 
