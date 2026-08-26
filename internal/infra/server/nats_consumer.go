@@ -33,7 +33,6 @@ type eventEnvelope struct {
 type consumerMetrics struct {
 	processedCount atomic.Int64
 	errorCount     atomic.Int64
-	processingTime atomic.Int64
 }
 
 type NatsConsumerServer struct {
@@ -144,10 +143,6 @@ func (c *NatsConsumerServer) consumer(ctx context.Context) (jetstream.Consumer, 
 }
 
 func (c *NatsConsumerServer) processJob(ctx context.Context, msg jetstream.Msg) {
-	startTime := time.Now()
-	defer func() {
-		c.metrics.processingTime.Add(time.Since(startTime).Milliseconds())
-	}()
 
 	workerCtx, span := c.dep.Tracer.Start(ctx, "NatsConsumerServer.ProcessWorker")
 	defer span.End()
