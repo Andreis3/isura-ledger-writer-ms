@@ -122,11 +122,9 @@ func (c *NatsConsumerServer) Start(ctx context.Context) error {
 		}
 	}
 
-	totalAttempts := max(c.metrics.processedCount.Load()+c.metrics.errorCount.Load(), 1)
 	c.dep.Log.InfoText("Consumer metrics",
 		slog.Int64("processed", c.metrics.processedCount.Load()),
 		slog.Int64("errors", c.metrics.errorCount.Load()),
-		slog.Int64("avg_processing_ms", c.metrics.processingTime.Load()/totalAttempts), // Fase 3: Média agora é real (inclui os erros)
 	)
 
 	return nil
@@ -140,7 +138,7 @@ func (c *NatsConsumerServer) consumer(ctx context.Context) (jetstream.Consumer, 
 			Durable:       cfg.Nats.Consumer.Durable,
 			FilterSubject: cfg.Nats.Subject,
 			AckPolicy:     jetstream.AckExplicitPolicy,
-			AckWait:       cfg.Nats.Consumer.AckWait * time.Second, // Atenção para a config JSON aqui!
+			AckWait:       cfg.Nats.Consumer.AckWait * time.Second,
 			MaxDeliver:    cfg.Nats.Consumer.MaxDeliver,
 		})
 }
