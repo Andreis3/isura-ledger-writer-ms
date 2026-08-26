@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
-	"sync/atomic"
 	"time"
 
 	"github.com/andreis3/isura-ledger-ms/internal/domain/event"
@@ -30,18 +29,11 @@ type eventEnvelope struct {
 	Type event.Type `json:"type"`
 }
 
-type consumerMetrics struct {
-	processedCount atomic.Int64
-	errorCount     atomic.Int64
-	processingTime atomic.Int64
-}
-
 type NatsConsumerServer struct {
 	dep        *dependency.BaseDeps
 	publisher  event.Publisher
 	maxWorkers int
 	semaphore  chan struct{}
-	metrics    *consumerMetrics
 	handlers   map[event.Type]types.QueueHandler
 }
 
@@ -57,7 +49,6 @@ func NewNatsConsumerServer(baseDeps *dependency.BaseDeps, publisher event.Publis
 		publisher:  publisher,
 		maxWorkers: maxW,
 		semaphore:  make(chan struct{}, maxW),
-		metrics:    &consumerMetrics{},
 		// Optimization: Handler cache
 		handlers: map[event.Type]types.QueueHandler{
 			event.CreatedBalance: factory.NewCreateBalanceFactory(baseDeps),
@@ -122,13 +113,6 @@ func (c *NatsConsumerServer) Start(ctx context.Context) error {
 		}
 	}
 
-	totalAttempts := max(c.metrics.processedCount.Load()+c.metrics.errorCount.Load(), 1)
-	c.dep.Log.InfoText("Consumer metrics",
-		slog.Int64("processed", c.metrics.processedCount.Load()),
-		slog.Int64("errors", c.metrics.errorCount.Load()),
-		slog.Int64("avg_processing_ms", c.metrics.processingTime.Load()/totalAttempts), // Fase 3: Média agora é real (inclui os erros)
-	)
-
 	return nil
 }
 
@@ -140,23 +124,18 @@ func (c *NatsConsumerServer) consumer(ctx context.Context) (jetstream.Consumer, 
 			Durable:       cfg.Nats.Consumer.Durable,
 			FilterSubject: cfg.Nats.Subject,
 			AckPolicy:     jetstream.AckExplicitPolicy,
-			AckWait:       cfg.Nats.Consumer.AckWait * time.Second, // Atenção para a config JSON aqui!
+			AckWait:       cfg.Nats.Consumer.AckWait * time.Second,
 			MaxDeliver:    cfg.Nats.Consumer.MaxDeliver,
 		})
 }
 
 func (c *NatsConsumerServer) processJob(ctx context.Context, msg jetstream.Msg) {
-	startTime := time.Now()
-	defer func() {
-		c.metrics.processingTime.Add(time.Since(startTime).Milliseconds())
-	}()
 
 	workerCtx, span := c.dep.Tracer.Start(ctx, "NatsConsumerServer.ProcessWorker")
 	defer span.End()
 
 	err := c.dispatch(workerCtx, msg)
 	if err != nil {
-		c.metrics.errorCount.Add(1)
 
 		span.RecordError(err)
 
@@ -203,7 +182,6 @@ func (c *NatsConsumerServer) processJob(ctx context.Context, msg jetstream.Msg) 
 		return
 	}
 
-	c.metrics.processedCount.Add(1)
 	_ = msg.Ack()
 }
 
