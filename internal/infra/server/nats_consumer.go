@@ -13,6 +13,7 @@ import (
 	"github.com/andreis3/isura-ledger-ms/internal/infra/dependency"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/factory"
 	"github.com/andreis3/isura-ledger-ms/internal/transport/queue"
+	"github.com/andreis3/isura-ledger-ms/internal/transport/queue/types"
 	"github.com/andreis3/isura-ledger-ms/internal/util"
 	"github.com/nats-io/nats.go/jetstream"
 	"go.opentelemetry.io/otel"
@@ -25,11 +26,11 @@ const (
 	BackoffBase       = 2.0 // Base for exponential backoff calculation
 )
 
-type EventEnvelope struct {
+type eventEnvelope struct {
 	Type event.Type `json:"type"`
 }
 
-type ConsumerMetrics struct {
+type consumerMetrics struct {
 	processedCount atomic.Int64
 	errorCount     atomic.Int64
 	processingTime atomic.Int64
@@ -37,20 +38,30 @@ type ConsumerMetrics struct {
 
 type NatsConsumerServer struct {
 	dep        *dependency.BaseDeps
-	publisher  event.Publisher // Injected publisher for DLQ or resend usage
+	publisher  event.Publisher
 	maxWorkers int
 	semaphore  chan struct{}
-	metrics    *ConsumerMetrics
+	metrics    *consumerMetrics
+	handlers   map[event.Type]types.QueueHandler
 }
 
-// NewNatsConsumerServer creates a new instance with injected dependencies and event.Publisher
 func NewNatsConsumerServer(baseDeps *dependency.BaseDeps, publisher event.Publisher) *NatsConsumerServer {
+	// Protection against MaxWorkers = 0 locking up the semaphore channel.
+	maxW := baseDeps.Cfg.Nats.Consumer.MaxWorkers
+	if maxW <= 0 {
+		maxW = 1
+	}
+
 	return &NatsConsumerServer{
 		dep:        baseDeps,
 		publisher:  publisher,
-		maxWorkers: baseDeps.Cfg.Nats.Consumer.MaxWorkers,
-		semaphore:  make(chan struct{}, baseDeps.Cfg.Nats.Consumer.MaxWorkers),
-		metrics:    &ConsumerMetrics{},
+		maxWorkers: maxW,
+		semaphore:  make(chan struct{}, maxW),
+		metrics:    &consumerMetrics{},
+		// Optimization: Handler cache
+		handlers: map[event.Type]types.QueueHandler{
+			event.CreatedBalance: factory.NewCreateBalanceFactory(baseDeps),
+		},
 	}
 }
 
@@ -68,8 +79,12 @@ func (c *NatsConsumerServer) Start(ctx context.Context) error {
 			go func() {
 				defer func() { <-c.semaphore }()
 
-				// Extract tracing while preserving the main context for graceful shutdown
-				msgCtx := otel.GetTextMapPropagator().Extract(ctx, propagation.HeaderCarrier(msg.Headers()))
+				// Context Isolation!
+				// Prevents a SIGTERM signal from abruptly interrupting the query in Postgres.
+				workerCtx := context.WithoutCancel(ctx)
+
+				// Extracts the trace, injecting it into the workerCtx, which is immune to cancellation.
+				msgCtx := otel.GetTextMapPropagator().Extract(workerCtx, propagation.HeaderCarrier(msg.Headers()))
 
 				c.processJob(msgCtx, msg)
 			}()
@@ -87,14 +102,31 @@ func (c *NatsConsumerServer) Start(ctx context.Context) error {
 		slog.Int("max_workers", c.maxWorkers),
 	)
 
+	// Graceful Shutdown
 	<-ctx.Done()
-	cc.Stop()
+	c.dep.Log.InfoText("Sinal de encerramento recebido. Drenando mensagens em voo...")
 
-	// Record final metrics
+	// Drains instead of stalling against brute force.
+	cc.Drain()
+
+	// Waits for ongoing goroutines to return slots to the semaphore, with a safety timeout
+	drainCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	for i := 0; i < c.maxWorkers; i++ {
+		select {
+		case c.semaphore <- struct{}{}:
+		case <-drainCtx.Done():
+			c.dep.Log.WarnText("Timeout aguardando drenagem dos workers do NATS. Forçando saída.")
+			break
+		}
+	}
+
+	totalAttempts := max(c.metrics.processedCount.Load()+c.metrics.errorCount.Load(), 1)
 	c.dep.Log.InfoText("Consumer metrics",
 		slog.Int64("processed", c.metrics.processedCount.Load()),
 		slog.Int64("errors", c.metrics.errorCount.Load()),
-		slog.Int64("avg_processing_ms", c.metrics.processingTime.Load()/max(c.metrics.processedCount.Load(), 1)),
+		slog.Int64("avg_processing_ms", c.metrics.processingTime.Load()/totalAttempts), // Fase 3: Média agora é real (inclui os erros)
 	)
 
 	return nil
@@ -108,8 +140,8 @@ func (c *NatsConsumerServer) consumer(ctx context.Context) (jetstream.Consumer, 
 			Durable:       cfg.Nats.Consumer.Durable,
 			FilterSubject: cfg.Nats.Subject,
 			AckPolicy:     jetstream.AckExplicitPolicy,
-			AckWait:       cfg.Nats.Consumer.AskWaitSeconds * time.Second,
-			MaxDeliver:    cfg.Nats.Consumer.MaxDelivery,
+			AckWait:       cfg.Nats.Consumer.AckWait * time.Second, // Atenção para a config JSON aqui!
+			MaxDeliver:    cfg.Nats.Consumer.MaxDeliver,
 		})
 }
 
@@ -125,47 +157,44 @@ func (c *NatsConsumerServer) processJob(ctx context.Context, msg jetstream.Msg) 
 	err := c.dispatch(workerCtx, msg)
 	if err != nil {
 		c.metrics.errorCount.Add(1)
+
+		span.RecordError(err)
+
 		c.dep.Log.ErrorJSON("Failed to process event",
 			"error", err.Error(),
 			"subject", msg.Subject(),
 		)
 
 		metadata, metaErr := msg.Metadata()
+		if metaErr != nil {
+			c.dep.Log.ErrorJSON("Failed to get message metadata", "error", metaErr.Error())
+		}
 
-		// 1. Check if error is permanent or if it exceeded the maximum delivery limit
-		maxDeliveries := uint64(c.dep.Cfg.Nats.Consumer.MaxDelivery)
-		if _, ok := errors.AsType[*queue.PermanentError](err); ok || (metaErr == nil && metadata.NumDelivered >= maxDeliveries) {
-			_ = msg.Term()
+		var permErr *queue.PermanentError
+		isPermanent := errors.As(err, &permErr)
+
+		var transErr *queue.TransientError
+		isTransient := errors.As(err, &transErr)
+
+		maxDeliveries := uint64(c.dep.Cfg.Nats.Consumer.MaxDeliver)
+		retriesExhausted := metaErr == nil && maxDeliveries > 0 && metadata.NumDelivered >= maxDeliveries
+
+		// The DLQ path (Exhaustion, Permanent Error, or Explicit Request)
+		if isPermanent || retriesExhausted || (isTransient && transErr.SendToDLQ) {
+			reason := "permanent error"
+			if retriesExhausted {
+				reason = "max deliveries reached"
+			}
+
+			c.publishToDLQ(workerCtx, msg, err)
+			_ = msg.TermWithReason(reason)
 			return
 		}
 
-		// 2. Determine delay based on transient error policy or exponential backoff calculation
+		// Transient Error: Recalculate Backoff
 		delay := DefaultRetryDelay
-
-		if transErr, ok := errors.AsType[*queue.TransientError](err); ok {
+		if isTransient {
 			delay = transErr.Delay
-
-			// If handler explicitly requested sending to DLQ via TransientError
-			if transErr.SendToDLQ {
-				c.dep.Log.ErrorJSON("Message marked for DLQ, publishing to dead letter subject",
-					"subject", msg.Subject(),
-					"error", err.Error(),
-				)
-
-				// 1. Create Dead Letter event encapsulating original subject and data
-				dlqEvent := event.NewDeadLetterEvent(msg.Subject(), msg.Data())
-
-				// 2. Publish event to broker before discarding current message
-				if pubErr := c.publisher.Publish(workerCtx, dlqEvent); pubErr != nil {
-					c.dep.Log.ErrorJSON("Failed to publish message to Dead Letter Queue", "error", pubErr.Error())
-					// Even if DLQ publishing fails, we still want to terminate the message
-					// to avoid an infinite loop, but log the critical error.
-				}
-
-				// 3. Terminate original message in JetStream
-				_ = msg.Term()
-				return
-			}
 		} else if metaErr == nil {
 			delay = backoffDelay(metadata.NumDelivered)
 		}
@@ -178,25 +207,34 @@ func (c *NatsConsumerServer) processJob(ctx context.Context, msg jetstream.Msg) 
 	_ = msg.Ack()
 }
 
-func (c *NatsConsumerServer) dispatch(ctx context.Context, msg jetstream.Msg) error {
-	var envelope EventEnvelope
-	if err := util.JsonEngine.Unmarshal(msg.Data(), &envelope); err != nil {
-		return fmt.Errorf("failed to unmarshal event envelope: %w", err)
-	}
+func (c *NatsConsumerServer) publishToDLQ(ctx context.Context, msg jetstream.Msg, err error) {
+	c.dep.Log.ErrorJSON("Message marked for DLQ, publishing to dead letter subject",
+		"subject", msg.Subject(),
+		"error", err.Error(),
+	)
 
-	switch envelope.Type {
-	case event.CreatedBalance:
-		return factory.NewCreateBalanceFactory(c.dep).Handle(ctx, msg)
-
-	default:
-		return fmt.Errorf("unsupported event type: %s", envelope.Type)
+	dlqEvent := event.NewDeadLetterEvent(msg.Subject(), msg.Data())
+	if pubErr := c.publisher.Publish(ctx, dlqEvent); pubErr != nil {
+		c.dep.Log.ErrorJSON("Failed to publish message to Dead Letter Queue", "error", pubErr.Error())
 	}
 }
 
-// backoffDelay returns the exponential backoff delay for a delivery attempt,
-// capped at MaxBackoffDelay. The cap is applied in float seconds, before the
-// conversion to time.Duration, so a large NumDelivered cannot overflow the
-// underlying int64 and produce a negative delay.
+func (c *NatsConsumerServer) dispatch(ctx context.Context, msg jetstream.Msg) error {
+	var envelope eventEnvelope
+	if err := util.JsonEngine.Unmarshal(msg.Data(), &envelope); err != nil {
+		// A malformed payload will never be fixed by a retry.
+		return queue.NewPermanentError(fmt.Errorf("failed to unmarshal event envelope: %w", err))
+	}
+
+	handler, exists := c.handlers[envelope.Type]
+	if !exists {
+		// Fase 2: Poison Pill resolvido. Evento desconhecido aciona a DLQ direto.
+		return queue.NewPermanentError(fmt.Errorf("unsupported event type: %s", envelope.Type))
+	}
+
+	return handler.Handle(ctx, msg)
+}
+
 func backoffDelay(numDelivered uint64) time.Duration {
 	seconds := math.Pow(BackoffBase, float64(numDelivered))
 	if seconds >= MaxBackoffDelay.Seconds() {

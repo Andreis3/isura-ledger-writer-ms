@@ -17,7 +17,7 @@
       "stream": "LEDGER_EVENTS",
       "name": "isura-ledger-writer-event",
       "durable": "isura-ledger-writer-event",
-      "ask_wait_seconds": 30,
+      "ack_wait": "30s",
       "max_deliver": 5,
       "max_workers": 100,
       "max_message_size": 100

@@ -12,6 +12,7 @@ import (
 	"github.com/andreis3/isura-ledger-ms/internal/domain/balance"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/fault"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/postgres/repository/criteria"
+	"github.com/andreis3/isura-ledger-ms/internal/transport/queue"
 )
 
 type CreateBalance struct {
@@ -59,7 +60,8 @@ func (c *CreateBalance) Execute(ctx context.Context, input dto.CreateBalanceInpu
 				fault.Attrs(err)...)...,
 		)
 		c.metrics.RecordCommandTotal("CreateBalance", "failure")
-		return nil
+		// TODO: criar um erro de dominino
+		return queue.NewPermanentError(err)
 	}
 
 	existBalance, err := c.balanceRepository.Find(ctx, criteria.BalanceCriteria{
@@ -140,7 +142,7 @@ func (c *CreateBalance) Execute(ctx context.Context, input dto.CreateBalanceInpu
 				fault.Attrs(err)...)...,
 		)
 		c.metrics.RecordCommandTotal("CreateBalance", "failure")
-		return nil
+		return err
 	}
 
 	c.log.InfoJSON("Balance create with success",
