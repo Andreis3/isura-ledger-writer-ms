@@ -2,6 +2,7 @@ package rest
 
 import (
 	"github.com/andreis3/isura-ledger-ms/internal/infra/dependency"
+	"github.com/andreis3/isura-ledger-ms/internal/infra/factory"
 	"github.com/go-chi/chi/v5"
 
 	"github.com/andreis3/isura-ledger-ms/internal/transport/rest/module"
@@ -25,7 +26,7 @@ func BuildRoutes(st *SetupDeps) []ModuleRoutes {
 		module.NewMetrics(),
 		module.NewPPROF(),
 		module.NewHealthCheck(st.Deps.Pg, st.Deps.Cfg.ApplicationName),
-		module.NewAccountModule(*st.Deps),
-		module.NewTransactionModule(*st.Deps),
+		module.NewAccountModule(*st.Deps, factory.NewCreateAccountFactory(st.Deps)),
+		module.NewTransactionModule(*st.Deps, factory.NewCreateTransactionFactory(st.Deps)),
 	}
 }
