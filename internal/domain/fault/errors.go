@@ -155,3 +155,12 @@ func InvalidCurrencyError(err error, fields map[string]any) *DomainError {
 		Fields:          fields,
 	}
 }
+
+func ConflictError(err error) *DomainError {
+	return &DomainError{
+		Code:            CodeConflict,
+		FriendlyMessage: "Conflict",
+		Cause:           err,
+		Origin:          CallerName(2),
+	}
+}

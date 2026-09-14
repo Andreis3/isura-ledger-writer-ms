@@ -26,9 +26,13 @@ func ResponseError(write http.ResponseWriter, err error) {
 	write.Header().Set(ContentType, ApplicationJSON)
 
 	if t, ok := errors.AsType[*fault.DomainError](err); ok {
+		cause := ""
+		if t.Cause != nil {
+			cause = t.Cause.Error()
+		}
 		result := TypeResponseError{
 			CodeError:       string(t.Code),
-			Cause:           t.Cause.Error(),
+			Cause:           cause,
 			ErrorFields:     t.Fields,
 			FriendlyMessage: t.FriendlyMessage,
 		}

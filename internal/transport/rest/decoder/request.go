@@ -13,7 +13,9 @@ func RequestDecoder[T any](req *http.Request) (T, error) {
 
 	// Use the Stream Decoder directly on the io.Reader of the request body.
 	// This avoids allocating a giant slice on the heap with io.ReadAll and uses Sonic's internal pool.
-	err := util.JsonEngine.NewDecoder(req.Body).Decode(&result)
+	decoder := util.JsonEngine.NewDecoder(req.Body)
+	decoder.DisallowUnknownFields()
+	err := decoder.Decode(&result)
 	if err != nil {
 		return result, fault.ErrorJSON(err)
 	}
