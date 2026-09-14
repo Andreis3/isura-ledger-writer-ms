@@ -148,8 +148,7 @@ func (p *Prometheus) RecordCommandTotal(command string, state string) {
 
 func (p *Prometheus) RecordCommandDuration(command string, duration float64) {
 	opt := api.WithAttributes(
-		attribute.Key("command").String(command),
-		attribute.Key("duration").Float64(duration))
+		attribute.Key("command").String(command))
 	p.ledgerCommandDurationMilliseconds.Record(context.Background(), duration, opt)
 }
 

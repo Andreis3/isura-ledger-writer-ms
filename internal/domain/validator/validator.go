@@ -40,7 +40,7 @@ func MinChars(value string, n int) bool {
 	return utf8.RuneCountInString(value) >= n
 }
 
-// MatchesUUID validates the UUID format (v1 to v5) without allocating memory on the heap via regex.
+// MatchesUUID validates the UUID format (v1 to v7) without allocating memory on the heap via regex.
 func MatchesUUID(value string) bool {
 	if len(value) != 36 {
 		return false
@@ -54,8 +54,8 @@ func MatchesUUID(value string) bool {
 				return false
 			}
 		case 14:
-			// UUID version must be from '1' to '5'
-			if c < '1' || c > '5' {
+			// UUID version must be from '1' to '7'
+			if c < '1' || c > '7' {
 				return false
 			}
 		case 19:
