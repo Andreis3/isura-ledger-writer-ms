@@ -30,6 +30,7 @@ help:
 	@echo "   make unit-verbose     - Roda os testes unitários via Ginkgo com race detector"
 	@echo "   make unit-cover       - Roda testes unitários medindo cobertura"
 	@echo "   make unit-report      - Gera relatório HTML e de funções da cobertura"
+	@echo "   make vet              - Executa análise estática no entrypoint do servidor"
 	@echo ""
 	@echo " [ Testes de Carga (Vegeta) ]"
 	@echo "   make test-load        - Roda teste de carga (Variáveis: PATH_VEGETA, URL, RATE, CONNECTIONS, WORKERS, DURATION) "
@@ -78,6 +79,9 @@ unit-report:
 	&& go test ./tests/unit/... -coverprofile=coverage/cover.out -coverpkg ./internal/... --tags=unit \
 	&& go tool cover -html=coverage/cover.out -o coverage/cover.html \
 	&& go tool cover -func=coverage/cover.out -o coverage/cover.functions.html
+
+vet:
+	@go vet ./cmd/server/main.go
 
 test-load:
 	@if echo "$(PATH_VEGETA)" | grep -q "transaction"; then \
@@ -148,4 +152,5 @@ migrate:
 		air,
 		run-race,
 		test-load,
-		help
+		help,
+		vet
