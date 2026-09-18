@@ -5,6 +5,8 @@ package postgres_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -22,6 +24,9 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
+	"github.com/andreis3/isura-ledger-ms/internal/application"
+	"github.com/andreis3/isura-ledger-ms/internal/application/command"
+	"github.com/andreis3/isura-ledger-ms/internal/application/dto"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/entity"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/fault"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/money"
@@ -120,6 +125,68 @@ var _ = ginkgo.Describe("transaction repository", ginkgo.Ordered, func() {
 		gomega.Expect(replayed.ID).To(gomega.Equal(original.ID))
 		gomega.Expect(replayed.Fingerprint).To(gomega.Equal(original.Fingerprint))
 		gomega.Expect(replayed.Entries).To(gomega.HaveLen(2))
+	})
+
+	ginkgo.It("serializes concurrent requests with the same idempotency key", func() {
+		debitExternalID, creditExternalID := insertAccountsForCommand(ctx, pool)
+		key := uuid.NewString()
+		amount := int64(1500)
+		currency := string(money.BRL)
+		operation := string(transaction.OperationTransfer)
+		newInput := func() dto.CreateTransactionInput {
+			return dto.CreateTransactionInput{
+				IdempotencyKey:  &key,
+				DebitAccountID:  &debitExternalID,
+				CreditAccountID: &creditExternalID,
+				Amount:          &amount,
+				Currency:        &currency,
+				Operation:       &operation,
+			}
+		}
+
+		createTransaction := command.NewCreateTransaction(
+			uow.NewUnitOfWork(pool),
+			repository.NewAccountRepository(pool),
+			repository.NewTransactionRepository(pool),
+			repository.NewOutBoxRepository(pool),
+			integrationTracer{}, integrationLogger{}, integrationMetrics{},
+		)
+		results := make(chan *dto.CreateTransactionOutput, 2)
+		errorsCh := make(chan error, 2)
+		var wg sync.WaitGroup
+		for range 2 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				result, err := createTransaction.Execute(ctx, newInput())
+				results <- result
+				errorsCh <- err
+			}()
+		}
+		wg.Wait()
+		close(results)
+		close(errorsCh)
+
+		var transactionID string
+		replays := 0
+		for err := range errorsCh {
+			gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		}
+		for result := range results {
+			gomega.Expect(result).NotTo(gomega.BeNil())
+			if result.IdempotentReplay {
+				replays++
+			}
+			if transactionID == "" {
+				transactionID = *result.TransactionID
+			}
+			gomega.Expect(*result.TransactionID).To(gomega.Equal(transactionID))
+		}
+		gomega.Expect(replays).To(gomega.Equal(1))
+
+		var count int
+		gomega.Expect(pool.QueryRow(ctx, "SELECT count(*) FROM transactions WHERE idempotency_key = $1", key).Scan(&count)).To(gomega.Succeed())
+		gomega.Expect(count).To(gomega.Equal(1))
 	})
 
 	ginkgo.It("rolls back transaction, entries and outbox together", func() {
@@ -245,6 +312,56 @@ func insertAccount(ctx context.Context, pool *pgxpool.Pool) string {
 	gomega.Expect(err).NotTo(gomega.HaveOccurred())
 	return id
 }
+
+func insertAccountsForCommand(ctx context.Context, pool *pgxpool.Pool) (string, string) {
+	ids := []string{uuid.NewString(), uuid.NewString()}
+	for index, externalID := range ids {
+		_, err := pool.Exec(ctx, `INSERT INTO accounts (id, account_external_id, account_number, tax_id, status, type, currency, created_at, updated_at) VALUES ($1, $2, $3, $4, 'ACTIVE', 'ASSET', 'BRL', $5, $5)`, newIDV7(), externalID, fmt.Sprintf("%d", time.Now().UnixNano()+int64(index)), "52998224725", time.Now())
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+	}
+	return ids[0], ids[1]
+}
+
+type integrationTracer struct{}
+
+func (integrationTracer) Start(ctx context.Context, _ string) (context.Context, application.Span) {
+	return ctx, integrationSpan{}
+}
+
+type integrationSpan struct{}
+
+func (integrationSpan) End()                                 {}
+func (integrationSpan) SpanContext() application.SpanContext { return integrationSpanContext{} }
+func (integrationSpan) RecordError(error)                    {}
+
+type integrationSpanContext struct{}
+
+func (integrationSpanContext) TraceID() string { return "integration-trace" }
+
+type integrationLogger struct{}
+
+func (integrationLogger) DebugJSON(string, ...any)               {}
+func (integrationLogger) InfoJSON(string, ...any)                {}
+func (integrationLogger) WarnJSON(string, ...any)                {}
+func (integrationLogger) ErrorJSON(string, ...any)               {}
+func (integrationLogger) CriticalJSON(string, ...any)            {}
+func (integrationLogger) DebugText(string, ...any)               {}
+func (integrationLogger) InfoText(string, ...any)                {}
+func (integrationLogger) WarnText(string, ...any)                {}
+func (integrationLogger) ErrorText(string, ...any)               {}
+func (integrationLogger) CriticalText(string, ...any)            {}
+func (integrationLogger) WithTrace(context.Context) *slog.Logger { return slog.Default() }
+func (integrationLogger) SlogJSON() *slog.Logger                 { return slog.Default() }
+func (integrationLogger) SlogText() *slog.Logger                 { return slog.Default() }
+
+type integrationMetrics struct{}
+
+func (integrationMetrics) RecordRequestTotal(string, string, int)                {}
+func (integrationMetrics) RecordDBQueryDuration(string, string, string, float64) {}
+func (integrationMetrics) RecordRequestDuration(string, string, int, float64)    {}
+func (integrationMetrics) RecordTransactionTotal(string)                         {}
+func (integrationMetrics) RecordCommandTotal(string, string)                     {}
+func (integrationMetrics) RecordCommandDuration(string, float64)                 {}
 
 func newTransaction(accountA, accountB string) *transaction.Transaction {
 	amount, err := money.NewMoney(1500, money.BRL)

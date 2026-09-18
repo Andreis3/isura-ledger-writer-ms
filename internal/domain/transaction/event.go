@@ -5,6 +5,7 @@ import (
 )
 
 type TransactionCreated struct {
+	EventID         string            `json:"event_id"`
 	TransactionID   string            `json:"transaction_id"`
 	IdempotencyKey  string            `json:"idempotency_key"`
 	DebitAccountID  string            `json:"debit_account_id"`
@@ -18,6 +19,12 @@ type TransactionCreated struct {
 
 func NewTransactionCreated() *TransactionCreated {
 	return &TransactionCreated{}
+}
+
+// WithEventID sets the outbox event identifier used for publication deduplication.
+func (t *TransactionCreated) WithEventID(eventID string) *TransactionCreated {
+	t.EventID = eventID
+	return t
 }
 
 func (t *TransactionCreated) WithTransactionID(transactionID string) *TransactionCreated {
@@ -68,6 +75,7 @@ func (t *TransactionCreated) WithMetadata(metadata map[string]string) *Transacti
 
 func (t *TransactionCreated) Build() *TransactionCreated {
 	return &TransactionCreated{
+		EventID:         t.EventID,
 		TransactionID:   t.TransactionID,
 		IdempotencyKey:  t.IdempotencyKey,
 		DebitAccountID:  t.DebitAccountID,
