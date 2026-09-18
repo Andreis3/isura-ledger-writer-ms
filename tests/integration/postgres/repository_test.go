@@ -4,15 +4,18 @@ package postgres_test
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
@@ -20,12 +23,14 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	"github.com/andreis3/isura-ledger-ms/internal/domain/entity"
+	"github.com/andreis3/isura-ledger-ms/internal/domain/fault"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/money"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/outbox"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/transaction"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/postgres/database"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/postgres/repository"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/postgres/repository/criteria"
+	"github.com/andreis3/isura-ledger-ms/internal/infra/postgres/uow"
 )
 
 func TestPostgresRepository(t *testing.T) {
@@ -156,6 +161,73 @@ var _ = ginkgo.Describe("transaction repository", ginkgo.Ordered, func() {
 		gomega.Expect(hasUpdate).To(gomega.BeFalse())
 		gomega.Expect(hasDelete).To(gomega.BeFalse())
 	})
+
+	ginkgo.It("assigns unique monotonic sequences for concurrent transfers sharing an account", func() {
+		sharedAccount := insertAccount(ctx, pool)
+		otherAccountA := insertAccount(ctx, pool)
+		otherAccountB := insertAccount(ctx, pool)
+
+		transfers := []*transaction.Transaction{
+			newTransaction(sharedAccount, otherAccountA),
+			newTransaction(otherAccountB, sharedAccount),
+		}
+		errs := make(chan error, len(transfers))
+		var wg sync.WaitGroup
+		for _, transfer := range transfers {
+			wg.Add(1)
+			go func(transfer *transaction.Transaction) {
+				defer wg.Done()
+				transactionCtx, err := pool.Begin(ctx)
+				if err != nil {
+					errs <- err
+					return
+				}
+				if err := repository.NewTransactionRepository(pool).Save(database.WithTx(ctx, transactionCtx), transfer); err != nil {
+					rollbackErr := transactionCtx.Rollback(ctx)
+					if rollbackErr != nil {
+						errs <- errors.Join(err, rollbackErr)
+						return
+					}
+					errs <- err
+					return
+				}
+				errs <- transactionCtx.Commit(ctx)
+			}(transfer)
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		}
+
+		rows, err := pool.Query(ctx, `SELECT account_sequence FROM entries WHERE account_id = $1 ORDER BY account_sequence`, sharedAccount)
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		defer rows.Close()
+		sequences := make([]int64, 0, 2)
+		for rows.Next() {
+			var sequence int64
+			gomega.Expect(rows.Scan(&sequence)).To(gomega.Succeed())
+			sequences = append(sequences, sequence)
+		}
+		gomega.Expect(rows.Err()).NotTo(gomega.HaveOccurred())
+		gomega.Expect(sequences).To(gomega.Equal([]int64{1, 2}))
+	})
+
+	ginkgo.It("returns ILMS-2004 after exhausting serialization retries", func() {
+		unitOfWork := uow.NewUnitOfWork(pool)
+		attempts := 0
+
+		err := unitOfWork.WithRetryableTransaction(ctx, func(context.Context) error {
+			attempts++
+			return &pgconn.PgError{Code: "40001", Message: "serialization failure"}
+		})
+
+		var domainErr *fault.DomainError
+		gomega.Expect(err).To(gomega.HaveOccurred())
+		gomega.Expect(errors.As(err, &domainErr)).To(gomega.BeTrue())
+		gomega.Expect(domainErr.Code).To(gomega.Equal(fault.CodeTimeoutError))
+		gomega.Expect(attempts).To(gomega.Equal(5))
+	})
 })
 
 func insertAccounts(ctx context.Context, tx pgx.Tx) (string, string) {
@@ -165,6 +237,13 @@ func insertAccounts(ctx context.Context, tx pgx.Tx) (string, string) {
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 	}
 	return ids[0], ids[1]
+}
+
+func insertAccount(ctx context.Context, pool *pgxpool.Pool) string {
+	id := uuid.NewString()
+	_, err := pool.Exec(ctx, `INSERT INTO accounts (id, account_external_id, account_number, tax_id, status, type, currency, created_at, updated_at) VALUES ($1, $2, $3, $4, 'ACTIVE', 'CHECKING', 'BRL', $5, $5)`, id, uuid.NewString(), uuid.NewString(), "12345678901234", time.Now())
+	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+	return id
 }
 
 func newTransaction(accountA, accountB string) *transaction.Transaction {

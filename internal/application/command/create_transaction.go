@@ -101,7 +101,7 @@ func (c *CreateTransaction) Execute(ctx context.Context, input dto.CreateTransac
 
 	var output *dto.CreateTransactionOutput
 
-	errUow := c.uow.WithTransaction(ctx, func(ctxTx context.Context) error {
+	errUow := c.uow.WithRetryableTransaction(ctx, func(ctxTx context.Context) error {
 		// 1. Deterministic lock to avoid deadlock
 		firstID, secondID := input.DebitAccountID, input.CreditAccountID
 		if *firstID > *secondID {

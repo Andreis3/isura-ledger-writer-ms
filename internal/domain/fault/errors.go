@@ -165,6 +165,17 @@ func ConflictError(err error) *DomainError {
 	}
 }
 
+// TransactionConflictError reports a transient database conflict after all
+// retry attempts were exhausted.
+func TransactionConflictError(err error) *DomainError {
+	return &DomainError{
+		Code:            CodeTimeoutError,
+		FriendlyMessage: "The transaction could not be completed due to temporary contention; please retry.",
+		Cause:           err,
+		Origin:          CallerName(2),
+	}
+}
+
 // IdempotencyConflictError reports reuse of a key with a different intent.
 func IdempotencyConflictError(err error) *DomainError {
 	return &DomainError{

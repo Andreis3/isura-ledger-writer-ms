@@ -66,7 +66,7 @@ air:
 	@air -c .air.toml
 
 unit:
-	@go test ./tests/unit/... --tags=unit -v
+	@go test ./tests/unit/... ./internal/infra/postgres/uow/... --tags=unit -v
 
 unit-verbose:
 	ginkgo -r --race --tags=unit --randomize-all --randomize-suites --fail-on-pending
