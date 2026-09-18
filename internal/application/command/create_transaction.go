@@ -78,8 +78,10 @@ func (c *CreateTransaction) Execute(ctx context.Context, input dto.CreateTransac
 		}
 		if existing != nil {
 			if existing.Fingerprint != requestFingerprint {
+				c.metrics.RecordIdempotencyTotal("conflict")
 				return fault.IdempotencyConflictError(errors.New("idempotency fingerprint mismatch"))
 			}
+			c.metrics.RecordIdempotencyTotal("replay")
 			output = replayOutput(existing)
 			return nil
 		}
@@ -110,6 +112,7 @@ func (c *CreateTransaction) Execute(ctx context.Context, input dto.CreateTransac
 			Status:           string(entityTransaction.Status),
 			IdempotentReplay: false,
 		}
+		c.metrics.RecordIdempotencyTotal("new")
 		return nil
 	})
 	if err != nil {

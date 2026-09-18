@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 	"time"
 
+	"github.com/andreis3/isura-ledger-ms/internal/application"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/fault"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/postgres/database"
 	"github.com/jackc/pgx/v5"
@@ -22,11 +23,16 @@ var (
 )
 
 type UnitOfWork struct {
-	begin func(context.Context) (pgx.Tx, error)
+	begin   func(context.Context) (pgx.Tx, error)
+	metrics application.Metrics
 }
 
-func NewUnitOfWork(pool *pgxpool.Pool) *UnitOfWork {
-	return &UnitOfWork{begin: func(ctx context.Context) (pgx.Tx, error) {
+func NewUnitOfWork(pool *pgxpool.Pool, metrics ...application.Metrics) *UnitOfWork {
+	var metric application.Metrics
+	if len(metrics) > 0 {
+		metric = metrics[0]
+	}
+	return &UnitOfWork{metrics: metric, begin: func(ctx context.Context) (pgx.Tx, error) {
 		return pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	}}
 }
@@ -61,7 +67,7 @@ func (u *UnitOfWork) WithRetryableTransaction(ctx context.Context, fn func(ctx c
 
 	return retryTransaction(ctx, maxRetries, func(ctx context.Context) error {
 		return u.WithTransaction(ctx, fn)
-	}, baseDelay, maxDelay)
+	}, baseDelay, maxDelay, u.metrics)
 }
 
 func retryTransaction(
@@ -70,7 +76,12 @@ func retryTransaction(
 	operation func(context.Context) error,
 	baseDelay time.Duration,
 	maxDelay time.Duration,
+	metrics ...application.Metrics,
 ) error {
+	var metric application.Metrics
+	if len(metrics) > 0 {
+		metric = metrics[0]
+	}
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		err := operation(ctx)
 		if err == nil {
@@ -83,6 +94,9 @@ func retryTransaction(
 
 		if attempt == maxAttempts-1 {
 			return fault.TransactionConflictError(errors.Join(err, ErrMaxRetriesExceeded))
+		}
+		if metric != nil {
+			metric.RecordConcurrencyRetry()
 		}
 
 		backoffLimit := float64(baseDelay) * math.Pow(2, float64(attempt))

@@ -362,6 +362,9 @@ func (integrationMetrics) RecordRequestDuration(string, string, int, float64)   
 func (integrationMetrics) RecordTransactionTotal(string)                         {}
 func (integrationMetrics) RecordCommandTotal(string, string)                     {}
 func (integrationMetrics) RecordCommandDuration(string, float64)                 {}
+func (integrationMetrics) RecordIdempotencyTotal(string)                         {}
+func (integrationMetrics) RecordConcurrencyRetry()                               {}
+func (integrationMetrics) RecordOutboxTotal(string, string)                      {}
 
 func newTransaction(accountA, accountB string) *transaction.Transaction {
 	amount, err := money.NewMoney(1500, money.BRL)

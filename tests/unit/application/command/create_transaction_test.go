@@ -254,3 +254,6 @@ func (testMetrics) RecordRequestDuration(string, string, int, float64)    {}
 func (testMetrics) RecordTransactionTotal(string)                         {}
 func (testMetrics) RecordCommandTotal(string, string)                     {}
 func (testMetrics) RecordCommandDuration(string, float64)                 {}
+func (testMetrics) RecordIdempotencyTotal(string)                         {}
+func (testMetrics) RecordConcurrencyRetry()                               {}
+func (testMetrics) RecordOutboxTotal(string, string)                      {}

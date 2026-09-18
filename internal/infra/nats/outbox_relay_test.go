@@ -69,6 +69,9 @@ func (relayMetrics) RecordRequestDuration(string, string, int, float64)    {}
 func (relayMetrics) RecordTransactionTotal(string)                         {}
 func (relayMetrics) RecordCommandTotal(string, string)                     {}
 func (relayMetrics) RecordCommandDuration(string, float64)                 {}
+func (relayMetrics) RecordIdempotencyTotal(string)                         {}
+func (relayMetrics) RecordConcurrencyRetry()                               {}
+func (relayMetrics) RecordOutboxTotal(string, string)                      {}
 
 func TestOutboxRelayPublishesWithDeduplicationHeaderAndMarksSuccess(t *testing.T) {
 	item, err := outbox.NewOutbox("transaction-id", []byte(`{"transaction_id":"transaction-id"}`))

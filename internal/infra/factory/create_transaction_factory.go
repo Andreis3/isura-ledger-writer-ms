@@ -11,7 +11,7 @@ func NewCreateTransactionFactory(
 	baseDeps *dependency.BaseDeps,
 ) *handler.CreateTransactionHandler {
 	composeBuild := dependency.NewComposer(baseDeps)
-	uowDep := uow.NewUnitOfWork(baseDeps.Pg.Pool())
+	uowDep := uow.NewUnitOfWork(baseDeps.Pg.Pool(), baseDeps.Prom)
 	transactionCommand := command.NewCreateTransaction(
 		uowDep,
 		composeBuild.BuildAccountRepo(),

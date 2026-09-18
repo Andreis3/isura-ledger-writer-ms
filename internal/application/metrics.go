@@ -7,4 +7,7 @@ type Metrics interface {
 	RecordTransactionTotal(status string)
 	RecordCommandTotal(command string, state string)
 	RecordCommandDuration(command string, duration float64)
+	RecordIdempotencyTotal(result string)
+	RecordConcurrencyRetry()
+	RecordOutboxTotal(status, eventType string)
 }

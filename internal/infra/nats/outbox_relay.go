@@ -121,6 +121,7 @@ func (r *OutboxRelay) publishOne(ctx context.Context, item *outbox.Outbox) {
 		span.RecordError(err)
 		r.handleFailure(workerCtx, item, err)
 	} else {
+		r.metrics.RecordOutboxTotal(string(outbox.Success), string(item.EventType))
 		r.metrics.RecordCommandTotal("OutboxRelay", "published")
 		r.log.InfoJSON("outbox event published", slog.String("outbox_id", item.ID.String()), slog.String("subject", msg.Subject))
 	}
@@ -138,6 +139,7 @@ func (r *OutboxRelay) handleFailure(ctx context.Context, item *outbox.Outbox, pu
 		r.log.ErrorJSON("outbox failure state update failed", slog.String("outbox_id", item.ID.String()), slog.String("error", err.Error()))
 	}
 	r.metrics.RecordCommandTotal("OutboxRelay", "failed")
+	r.metrics.RecordOutboxTotal(string(outbox.Failed), string(item.EventType))
 }
 
 func (r *OutboxRelay) publishDLQ(ctx context.Context, item *outbox.Outbox) error {
