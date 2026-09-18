@@ -12,10 +12,14 @@ message CreateTransactionRequest {
   string credit_account_id = 3;
   int64 amount = 4;
   string currency = 5;
+  string operation = 6;
+  map<string, string> metadata = 7;
 }
 
 message CreateTransactionResponse {
   string transaction_id = 1;
+  string status = 2;
+  bool idempotent_replay = 3;
 }
 
 // ─── GetTransaction ───────────────────────────────────────────
@@ -40,4 +44,3 @@ message EntryResponse {
   string currency = 4;
   string account_id = 5;
 }
-

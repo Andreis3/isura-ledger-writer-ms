@@ -8,12 +8,12 @@ option go_package = "github.com/andreis3/isura-ledger-ms/internal/transport/grpc
 
 // Tipos contábeis do motor double-entry
 enum AccountType {
-  TYPE_UNSPECIFIED = 0;
-  TYPE_ASSET = 1;       // Ativo (Reservas/Empréstimos)
-  TYPE_LIABILITY = 2;   // Passivo (Contas de clientes)
-  TYPE_EQUITY = 3;      // Patrimônio Líquido (Capital Social)
-  TYPE_REVENUE = 4;     // Receita de Tarifas
-  TYPE_EXPENSE = 5;     // Despesas operacionais
+  ACCOUNT_TYPE_UNSPECIFIED = 0;
+  ACCOUNT_TYPE_ASSET = 1;       // Ativo (Reservas/Empréstimos)
+  ACCOUNT_TYPE_LIABILITY = 2;   // Passivo (Contas de clientes)
+  ACCOUNT_TYPE_EQUITY = 3;      // Patrimônio Líquido (Capital Social)
+  ACCOUNT_TYPE_REVENUE = 4;     // Receita de Tarifas
+  ACCOUNT_TYPE_EXPENSE = 5;     // Despesas operacionais
 }
 
 // Moedas suportadas pelo motor
