@@ -164,3 +164,23 @@ func ConflictError(err error) *DomainError {
 		Origin:          CallerName(2),
 	}
 }
+
+// IdempotencyConflictError reports reuse of a key with a different intent.
+func IdempotencyConflictError(err error) *DomainError {
+	return &DomainError{
+		Code:            CodeDuplicateTransaction,
+		FriendlyMessage: "Idempotency key was already used with different parameters.",
+		Cause:           err,
+		Origin:          CallerName(2),
+	}
+}
+
+// InvalidTransferError reports a violation of the transfer double-entry invariant.
+func InvalidTransferError(err error) *DomainError {
+	return &DomainError{
+		Code:            CodeInvalidEntity,
+		FriendlyMessage: "The transfer must contain one debit and one credit entry.",
+		Cause:           err,
+		Origin:          CallerName(2),
+	}
+}

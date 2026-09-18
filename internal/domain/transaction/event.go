@@ -5,14 +5,15 @@ import (
 )
 
 type TransactionCreated struct {
-	TransactionID   string    `json:"transaction_id"`
-	IdempotencyKey  string    `json:"idempotency_key"`
-	DebitAccountID  string    `json:"debit_account_id"`
-	CreditAccountID string    `json:"credit_account_id"`
-	Amount          int64     `json:"amount"`
-	Currency        string    `json:"currency"`
-	Status          string    `json:"status"`
-	OccurredAt      time.Time `json:"occurred_at"`
+	TransactionID   string            `json:"transaction_id"`
+	IdempotencyKey  string            `json:"idempotency_key"`
+	DebitAccountID  string            `json:"debit_account_id"`
+	CreditAccountID string            `json:"credit_account_id"`
+	Amount          int64             `json:"amount"`
+	Currency        string            `json:"currency"`
+	Status          string            `json:"status"`
+	OccurredAt      time.Time         `json:"occurred_at"`
+	Metadata        map[string]string `json:"metadata,omitempty"`
 }
 
 func NewTransactionCreated() *TransactionCreated {
@@ -59,6 +60,12 @@ func (t *TransactionCreated) WithOccurredAt(occurredAt time.Time) *TransactionCr
 	return t
 }
 
+// WithMetadata stores a copy of the event metadata.
+func (t *TransactionCreated) WithMetadata(metadata map[string]string) *TransactionCreated {
+	t.Metadata = cloneMetadata(metadata)
+	return t
+}
+
 func (t *TransactionCreated) Build() *TransactionCreated {
 	return &TransactionCreated{
 		TransactionID:   t.TransactionID,
@@ -69,6 +76,7 @@ func (t *TransactionCreated) Build() *TransactionCreated {
 		Currency:        t.Currency,
 		Status:          t.Status,
 		OccurredAt:      t.OccurredAt,
+		Metadata:        cloneMetadata(t.Metadata),
 	}
 }
 
@@ -76,11 +84,12 @@ func TransactionCreatedFacade(entityTransaction Transaction, idempotencyKey stri
 	return NewTransactionCreated().
 		WithTransactionID(entityTransaction.ID.String()).
 		WithIdempotencyKey(idempotencyKey).
-		WithDebitAccountID(creditAccountID).
-		WithCreditAccountID(debitAccountID).
+		WithDebitAccountID(debitAccountID).
+		WithCreditAccountID(creditAccountID).
 		WithAmount(entityTransaction.Amount.Amount()).
 		WithCurrency(string(entityTransaction.Amount.Currency())).
 		WithStatus(string(entityTransaction.Status)).
 		WithOccurredAt(time.Now()).
+		WithMetadata(entityTransaction.Metadata).
 		Build()
 }
