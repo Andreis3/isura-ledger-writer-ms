@@ -16,6 +16,11 @@ table "entries" {
       null = false
   }
 
+  column "account_sequence" {
+    type = bigint
+    null = false
+  }
+
   column "direction" {
     type = varchar(6)
     null = false
@@ -29,6 +34,11 @@ table "entries" {
   column "currency" {
     type = varchar(5)
     null = false
+  }
+
+  column "metadata" {
+    type = jsonb
+    null = true
   }
 
   column "created_at" {
@@ -52,5 +62,18 @@ table "entries" {
 
   index "idx_entries_transaction_id" {
     columns = [column.transaction_id]
+  }
+
+  index "unique_account_sequence" {
+    columns = [column.account_id, column.account_sequence]
+    unique = true
+  }
+
+  check "entries_amount_positive" {
+    expr = "amount > 0"
+  }
+
+  check "entries_direction_valid" {
+    expr = "((direction)::text = ANY ((ARRAY['DEBIT'::character varying, 'CREDIT'::character varying])::text[]))"
   }
 }

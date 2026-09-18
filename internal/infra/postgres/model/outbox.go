@@ -63,7 +63,7 @@ func ToOutboxDomain(model Outbox) (*outbox.Outbox, error) {
 		return nil, err
 	}
 
-	return outbox.NewOutboxBuilder().
+	builder := outbox.NewOutboxBuilder().
 		WithID(id.String()).
 		WithAggregateID(model.AggregateID.String).
 		WithAggregateType(outbox.AggregateType(model.AggregateType.String)).
@@ -71,8 +71,13 @@ func ToOutboxDomain(model Outbox) (*outbox.Outbox, error) {
 		WithPayload(model.Payload).
 		WithStatus(outbox.StatusOutbox(model.Status.String)).
 		WithAttempts(int(model.Attempts.Int16)).
-		WithCreatedAt(model.CreatedAt.Time).
-		WithPublishedAt(model.PublishedAt.Time).
-		Build()
+		WithCreatedAt(model.CreatedAt.Time)
+	if lastAttemptAt := database.ToTimePtr(model.LastAttemptAt); lastAttemptAt != nil {
+		builder.WithLastAttemptAt(*lastAttemptAt)
+	}
+	if publishedAt := database.ToTimePtr(model.PublishedAt); publishedAt != nil {
+		builder.WithPublishedAt(*publishedAt)
+	}
+	return builder.Build()
 
 }

@@ -62,4 +62,12 @@ table "outbox_events" {
   index "idx_outbox_events_status" {
     columns = [column.status]
   }
+
+  check "outbox_attempts_non_negative" {
+    expr = "attempts >= 0"
+  }
+
+  check "outbox_status_valid" {
+    expr = "((status)::text = ANY ((ARRAY['PENDING'::character varying, 'FAILED'::character varying, 'SUCCESS'::character varying])::text[]))"
+  }
 }

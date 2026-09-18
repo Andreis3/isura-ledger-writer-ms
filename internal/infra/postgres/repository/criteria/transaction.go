@@ -60,14 +60,14 @@ func GetTransactionCriteria(baseQuery string, params TransactionCriteria) (strin
 		argCount++
 	}
 
-	// Adiciona a diretiva correta de bloqueio pessimista ao final da query
+	sb.WriteString(" LIMIT 1")
+
+	// PostgreSQL exige LIMIT antes da cláusula de locking.
 	if params.HasForUpdate {
 		sb.WriteString(" FOR UPDATE")
 	} else if params.HasForUpdateSkipLock {
 		sb.WriteString(" FOR UPDATE SKIP LOCKED")
 	}
-
-	sb.WriteString(" LIMIT 1")
 
 	return sb.String(), args
 }
