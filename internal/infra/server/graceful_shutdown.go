@@ -25,6 +25,7 @@ func StartServersWithGracefulShutdown() {
 	httpSrv := NewHTTPServer(deps)
 
 	natsConsumer := NewNatsConsumerServer(deps, natsPublisher)
+	outboxRelay := composer.BuildOutboxRelay()
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -53,6 +54,15 @@ func StartServersWithGracefulShutdown() {
 		case err := <-errCh:
 			return err
 		}
+	})
+
+	// Goroutine for the transactional outbox relay.
+	g.Go(func() error {
+		deps.Log.InfoText("Starting outbox relay...")
+		if err := outboxRelay.Run(ctx); err != nil {
+			return err
+		}
+		return nil
 	})
 
 	// Goroutine for the gRPC server

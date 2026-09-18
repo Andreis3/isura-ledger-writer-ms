@@ -218,6 +218,7 @@ func (b *OutboxBuilder) Build() (*Outbox, error) {
 		Payload:       b.payload,
 		Status:        b.status,
 		Attempts:      b.attempts,
+		LastAttemptAt: b.lastAttemptAt,
 		CreatedAt:     b.createdAt,
 		PublishedAt:   b.publishedAt,
 	}, nil

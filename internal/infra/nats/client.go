@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/andreis3/isura-ledger-ms/internal/domain/event"
+	"github.com/andreis3/isura-ledger-ms/internal/domain/outbox"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/configs"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -73,6 +74,31 @@ func SetupStreams(ctx context.Context, js jetstream.JetStream, cfg *configs.Conf
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create or update dead letter stream: %w", err)
+	}
+
+	relaySubject := cfg.Nats.Relay.Subject
+	if relaySubject == "" {
+		relaySubject = string(outbox.TransactionCreated)
+	}
+	relayStream := cfg.Nats.Relay.Stream
+	if relayStream == "" {
+		relayStream = cfg.Nats.Name + "_TRANSACTIONS"
+	}
+	if _, err = js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
+		Name: relayStream, Subjects: []string{relaySubject}, Storage: jetstream.FileStorage,
+		Retention: jetstream.LimitsPolicy, MaxAge: streamMaxAge, Replicas: 1, Discard: jetstream.DiscardOld,
+	}); err != nil {
+		return fmt.Errorf("failed to create or update outbox relay stream: %w", err)
+	}
+	relayDLQ := cfg.Nats.Relay.DLQSubject
+	if relayDLQ == "" {
+		relayDLQ = relaySubject + event.DLQSubjectSuffix
+	}
+	if _, err = js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
+		Name: relayStream + DLQStreamSuffix, Subjects: []string{relayDLQ}, Storage: jetstream.FileStorage,
+		Retention: jetstream.LimitsPolicy, MaxAge: dlqMaxAge, Replicas: 1, Discard: jetstream.DiscardOld,
+	}); err != nil {
+		return fmt.Errorf("failed to create or update outbox relay dead letter stream: %w", err)
 	}
 
 	return nil

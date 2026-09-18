@@ -56,3 +56,14 @@ func (c *Composer) BuildBalance() balance.Repository {
 func (c *Composer) BuildNatsPublisher() event.Publisher {
 	return nats.NewJetStreamPublisher(c.deps.Nats.JS, c.deps.Tracer)
 }
+
+func (c *Composer) BuildOutboxRelay() *nats.OutboxRelay {
+	return nats.NewOutboxRelay(
+		c.BuildOutboxRepo(),
+		c.deps.Nats.JS,
+		c.deps.Tracer,
+		c.deps.Log,
+		c.deps.Prom,
+		c.deps.Cfg.Nats.Relay,
+	)
+}

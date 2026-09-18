@@ -15,6 +15,7 @@ type UpdateOutboxData struct {
 }
 type Repository interface {
 	Save(ctx context.Context, outbox *Outbox) error
+	ClaimPending(ctx context.Context, limit, maxAttempts int, retryAfter time.Duration) ([]*Outbox, error)
 	FindAll(ctx context.Context, status StatusOutbox, limit int) ([]*Outbox, error)
 	UpdateOutboxData(ctx context.Context, outboxID entity.ID, data UpdateOutboxData) error
 }

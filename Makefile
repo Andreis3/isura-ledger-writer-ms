@@ -32,6 +32,9 @@ help:
 	@echo "   make unit-report      - Gera relatório HTML e de funções da cobertura"
 	@echo "   make vet              - Executa análise estática no entrypoint do servidor"
 	@echo ""
+	@echo " [ Testes Integração ]"
+	@echo "   make integration-tests - Roda os testes unitários básicos"
+	@echo ""
 	@echo " [ Testes de Carga (Vegeta) ]"
 	@echo "   make test-load        - Roda teste de carga (Variáveis: PATH_VEGETA, URL, RATE, CONNECTIONS, WORKERS, DURATION) "
 	@echo ""
@@ -66,7 +69,7 @@ air:
 	@air -c .air.toml
 
 unit:
-	@go test ./tests/unit/... ./internal/infra/postgres/uow/... --tags=unit -v
+	@go test ./tests/unit/... ./internal/infra/nats/... ./internal/infra/postgres/uow/... --tags=unit -v
 
 unit-verbose:
 	ginkgo -r --race --tags=unit --randomize-all --randomize-suites --fail-on-pending
@@ -79,6 +82,9 @@ unit-report:
 	&& go test ./tests/unit/... -coverprofile=coverage/cover.out -coverpkg ./internal/... --tags=unit \
 	&& go tool cover -html=coverage/cover.out -o coverage/cover.html \
 	&& go tool cover -func=coverage/cover.out -o coverage/cover.functions.html
+
+integration-tests:
+	@go test ./tests/integration/... --tags=integration -v -count=1
 
 vet:
 	@go vet ./cmd/server/main.go
@@ -153,4 +159,5 @@ migrate:
 		run-race,
 		test-load,
 		help,
-		vet
+		vet,
+		integration-tests

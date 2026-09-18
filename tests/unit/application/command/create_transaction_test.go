@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/andreis3/isura-ledger-ms/internal/application"
 	"github.com/andreis3/isura-ledger-ms/internal/application/command"
@@ -195,6 +196,10 @@ func (r *outboxRepository) Save(_ context.Context, value *outbox.Outbox) error {
 	}
 	r.saved = value
 	return nil
+}
+
+func (r *outboxRepository) ClaimPending(context.Context, int, int, time.Duration) ([]*outbox.Outbox, error) {
+	return nil, nil
 }
 
 func (r *outboxRepository) FindAll(context.Context, outbox.StatusOutbox, int) ([]*outbox.Outbox, error) {

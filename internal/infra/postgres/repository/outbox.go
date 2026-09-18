@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"time"
 
 	"github.com/andreis3/isura-ledger-ms/internal/domain/entity"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -55,6 +56,64 @@ func (r *OutBoxRepository) Save(ctx context.Context, outbox *outbox.Outbox) erro
 	return err
 
 }
+
+// ClaimPending atomically reserves a batch before publication. The database
+// lock is held only for this UPDATE ... RETURNING statement, never while NATS
+// is called.
+func (r *OutBoxRepository) ClaimPending(ctx context.Context, limit, maxAttempts int, retryAfter time.Duration) ([]*outbox.Outbox, error) {
+	if limit <= 0 || maxAttempts <= 0 {
+		return nil, nil
+	}
+
+	db := resolveDB(ctx, r.db)
+	query := `
+	WITH candidates AS (
+		SELECT id
+		FROM outbox_events
+		WHERE attempts < $1
+		  AND (
+			status = $2
+			OR (status = $3 AND last_attempt_at <= now() - $4::interval)
+		  )
+		ORDER BY created_at, id
+		FOR UPDATE SKIP LOCKED
+		LIMIT $5
+	)
+	UPDATE outbox_events AS events
+	SET status = $3, attempts = events.attempts + 1, last_attempt_at = now()
+	FROM candidates
+	WHERE events.id = candidates.id
+	RETURNING events.id, events.aggregate_id, events.aggregate_type,
+		events.event_type, events.payload, events.status, events.attempts,
+		events.last_attempt_at, events.created_at, events.published_at`
+
+	rows, err := db.Query(ctx, query, maxAttempts, outbox.Pending, outbox.Failed,
+		retryAfter.String(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	claimed := make([]*outbox.Outbox, 0, limit)
+	for rows.Next() {
+		var item model.Outbox
+		if err := rows.Scan(&item.ID, &item.AggregateID, &item.AggregateType,
+			&item.EventType, &item.Payload, &item.Status, &item.Attempts,
+			&item.LastAttemptAt, &item.CreatedAt, &item.PublishedAt); err != nil {
+			return nil, err
+		}
+		domainItem, err := model.ToOutboxDomain(item)
+		if err != nil {
+			return nil, err
+		}
+		claimed = append(claimed, domainItem)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return claimed, nil
+}
+
 func (r *OutBoxRepository) FindAll(ctx context.Context, status outbox.StatusOutbox, limit int) ([]*outbox.Outbox, error) {
 	db := resolveDB(ctx, r.db)
 

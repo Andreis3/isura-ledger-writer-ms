@@ -21,6 +21,16 @@
       "max_deliver": 5,
       "max_workers": 100,
       "max_message_size": 100
+    },
+    "relay": {
+      "stream": "LEDGER_TRANSACTION_EVENTS",
+      "subject": "ledger.transaction.created",
+      "dlq_subject": "ledger.transaction.created.dlq",
+      "batch_size": 100,
+      "max_workers": 4,
+      "max_attempts": 3,
+      "poll_interval": "1s",
+      "retry_after": "5s"
     }
   },
   "data_base": {
