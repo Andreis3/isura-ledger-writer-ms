@@ -5,11 +5,12 @@ import (
 	"errors"
 	"math"
 	"math/rand/v2"
-	"strings"
 	"time"
 
+	"github.com/andreis3/isura-ledger-ms/internal/application"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/fault"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/postgres/database"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -22,21 +23,28 @@ var (
 )
 
 type UnitOfWork struct {
-	pool *pgxpool.Pool
+	begin   func(context.Context) (pgx.Tx, error)
+	metrics application.Metrics
 }
 
-func NewUnitOfWork(pool *pgxpool.Pool) *UnitOfWork {
-	return &UnitOfWork{pool: pool}
+func NewUnitOfWork(pool *pgxpool.Pool, metrics ...application.Metrics) *UnitOfWork {
+	var metric application.Metrics
+	if len(metrics) > 0 {
+		metric = metrics[0]
+	}
+	return &UnitOfWork{metrics: metric, begin: func(ctx context.Context) (pgx.Tx, error) {
+		return pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	}}
 }
 
 func (u *UnitOfWork) WithTransaction(ctx context.Context, fn func(ctx context.Context) error) error {
-	tx, err := u.pool.Begin(ctx)
+	tx, err := u.begin(ctx)
 	if err != nil {
 		return fault.BeginTransactionError(errors.Join(err, ErrBeginTransaction))
 	}
 
 	if err := fn(database.WithTx(ctx, tx)); err != nil {
-		rbCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		rbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 
 		if rbErr := tx.Rollback(rbCtx); rbErr != nil {
@@ -57,8 +65,25 @@ func (u *UnitOfWork) WithRetryableTransaction(ctx context.Context, fn func(ctx c
 	const baseDelay = 10 * time.Millisecond
 	const maxDelay = 200 * time.Millisecond
 
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		err := u.WithTransaction(ctx, fn)
+	return retryTransaction(ctx, maxRetries, func(ctx context.Context) error {
+		return u.WithTransaction(ctx, fn)
+	}, baseDelay, maxDelay, u.metrics)
+}
+
+func retryTransaction(
+	ctx context.Context,
+	maxAttempts int,
+	operation func(context.Context) error,
+	baseDelay time.Duration,
+	maxDelay time.Duration,
+	metrics ...application.Metrics,
+) error {
+	var metric application.Metrics
+	if len(metrics) > 0 {
+		metric = metrics[0]
+	}
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		err := operation(ctx)
 		if err == nil {
 			return nil
 		}
@@ -67,8 +92,11 @@ func (u *UnitOfWork) WithRetryableTransaction(ctx context.Context, fn func(ctx c
 			return err
 		}
 
-		if attempt == maxRetries-1 {
-			return fault.ConflictError(errors.Join(err, ErrMaxRetriesExceeded))
+		if attempt == maxAttempts-1 {
+			return fault.TransactionConflictError(errors.Join(err, ErrMaxRetriesExceeded))
+		}
+		if metric != nil {
+			metric.RecordConcurrencyRetry()
 		}
 
 		backoffLimit := float64(baseDelay) * math.Pow(2, float64(attempt))
@@ -78,23 +106,24 @@ func (u *UnitOfWork) WithRetryableTransaction(ctx context.Context, fn func(ctx c
 
 		sleepDuration := time.Duration(rand.Int64N(int64(backoffLimit)))
 
+		timer := time.NewTimer(sleepDuration)
 		select {
-		case <-time.After(sleepDuration):
+		case <-timer.C:
 		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
 			return ctx.Err()
 		}
 	}
-	return nil
+	return fault.TransactionConflictError(ErrMaxRetriesExceeded)
 }
 
 func isConcurrencyConflict(err error) bool {
-	// Correção: Extrai o ponteiro do erro tipado tratando unwrapping de forma segura via Go nativo
 	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
-		// Altere para a sua constraint de concorrência do Ledger (ex: unique_account_sequence)
-		if pgErr.Code == "23505" && (pgErr.ConstraintName == "unique_account_sequence" ||
-			strings.Contains(pgErr.ConstraintName, "idempotency_key")) {
-			return true
-		}
+		return pgErr.Code == "40001" ||
+			pgErr.Code == "40P01" ||
+			(pgErr.Code == "23505" && pgErr.ConstraintName == "unique_entry_sequence_number")
 	}
 	return false
 }

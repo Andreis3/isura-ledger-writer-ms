@@ -16,37 +16,45 @@ const (
 )
 
 type TypeResponseError struct {
-	CodeError       string         `json:"code_error"`
-	Cause           string         `json:"cause,omitempty"`
-	ErrorFields     map[string]any `json:"error_fields,omitempty"`
-	FriendlyMessage any            `json:"friendly_message"`
+	Error ErrorResponse `json:"error"`
+}
+
+type ErrorResponse struct {
+	Code      string         `json:"code"`
+	Message   string         `json:"message"`
+	Retryable bool           `json:"retryable"`
+	Fields    map[string]any `json:"fields,omitempty"`
 }
 
 func ResponseError(write http.ResponseWriter, err error) {
 	write.Header().Set(ContentType, ApplicationJSON)
 
 	if t, ok := errors.AsType[*fault.DomainError](err); ok {
-		cause := ""
-		if t.Cause != nil {
-			cause = t.Cause.Error()
-		}
 		result := TypeResponseError{
-			CodeError:       string(t.Code),
-			Cause:           cause,
-			ErrorFields:     t.Fields,
-			FriendlyMessage: t.FriendlyMessage,
+			Error: ErrorResponse{
+				Code:      string(t.Code),
+				Message:   t.FriendlyMessage,
+				Retryable: isRetryable(t.Code),
+				Fields:    t.Fields,
+			},
 		}
 
-		write.WriteHeader(translator.TranslatorStatusCode[t.Code].HTTPStatus)
+		write.WriteHeader(translator.HTTPStatus(t.Code))
 		_ = sonic.ConfigDefault.NewEncoder(write).Encode(result)
 		return
 	}
 
 	write.WriteHeader(http.StatusInternalServerError)
 
-	result := TypeResponseError{
-		FriendlyMessage: "Internal server error",
-	}
+	result := TypeResponseError{Error: ErrorResponse{
+		Code:      "ILMS-9001",
+		Message:   "Internal server error",
+		Retryable: false,
+	}}
 
 	_ = util.JsonEngine.NewEncoder(write).Encode(result)
+}
+
+func isRetryable(code fault.Code) bool {
+	return code == fault.CodeDatabaseError || code == fault.CodeTimeoutError || code == fault.CodeExternalService
 }

@@ -62,7 +62,7 @@ func (r *ObservabilityTransactionRepo) Find(ctx context.Context, params criteria
 	transactionResponse, err := r.repo.Find(ctx, params)
 
 	if err != nil {
-
+		span.RecordError(err)
 		return nil, err
 	}
 

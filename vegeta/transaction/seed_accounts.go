@@ -16,7 +16,6 @@ import (
 )
 
 type AccountRequest struct {
-	OwnerID           string `json:"owner_id"`
 	AccountExternalID string `json:"account_external_id"`
 	TaxID             string `json:"tax_id"`
 	AccountNumber     string `json:"account_number"`
@@ -50,7 +49,6 @@ func main() {
 			for range jobs {
 				accountExtID := uuid.New().String()
 				payload := AccountRequest{
-					OwnerID:           uuid.New().String(),
 					AccountExternalID: accountExtID,
 					TaxID:             GerarCNPJ(rng),
 					AccountNumber:     strconv.FormatInt(time.Now().UnixNano()+int64(rng.Intn(100000)), 10),

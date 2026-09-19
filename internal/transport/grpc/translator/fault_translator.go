@@ -23,17 +23,17 @@ var translator = map[fault.Code]ProtocolError{
 	fault.CodeForbidden:            {GRPCCode: codes.PermissionDenied},
 	fault.CodeNotFound:             {GRPCCode: codes.NotFound},
 	fault.CodeConflict:             {GRPCCode: codes.AlreadyExists},
-	fault.CodeUnprocessableEntity:  {GRPCCode: codes.InvalidArgument},
+	fault.CodeUnprocessableEntity:  {GRPCCode: codes.FailedPrecondition},
 	fault.CodeInternal:             {GRPCCode: codes.Internal},
-	fault.CodeDatabaseError:        {GRPCCode: codes.Internal},
+	fault.CodeDatabaseError:        {GRPCCode: codes.Unavailable},
 	fault.CodeInvalidEntity:        {GRPCCode: codes.InvalidArgument},
 	fault.CodeUnknown:              {GRPCCode: codes.Unknown},
 	fault.CodeCacheError:           {GRPCCode: codes.Internal},
 	fault.CodeExternalService:      {GRPCCode: codes.Unavailable},
-	fault.CodeTimeoutError:         {GRPCCode: codes.DeadlineExceeded},
+	fault.CodeTimeoutError:         {GRPCCode: codes.Unavailable},
 	fault.CodeInvalidTransfer:      {GRPCCode: codes.InvalidArgument},
-	fault.CodeInsufficientBalance:  {GRPCCode: codes.InvalidArgument},
-	fault.CodeDuplicateTransaction: {GRPCCode: codes.InvalidArgument},
+	fault.CodeInsufficientBalance:  {GRPCCode: codes.FailedPrecondition},
+	fault.CodeDuplicateTransaction: {GRPCCode: codes.AlreadyExists},
 }
 
 // GRPCStatus returns the corresponding GRPC status for the error.

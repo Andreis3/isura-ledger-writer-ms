@@ -45,6 +45,23 @@ func (r *ObservabilityOutboxRepo) Save(ctx context.Context, outbox *outbox.Outbo
 	return nil
 }
 
+func (r *ObservabilityOutboxRepo) ClaimPending(ctx context.Context, limit, maxAttempts int, retryAfter time.Duration) ([]*outbox.Outbox, error) {
+	ctx, span := r.tracer.Start(ctx, "OutboxRepository.ClaimPending")
+	defer span.End()
+
+	start := time.Now()
+	defer func() {
+		r.metric.RecordDBQueryDuration("postgres", "outbox", "claim_pending", float64(time.Since(start).Milliseconds()))
+	}()
+
+	items, err := r.repo.ClaimPending(ctx, limit, maxAttempts, retryAfter)
+	if err != nil {
+		span.RecordError(err)
+		return nil, err
+	}
+	return items, nil
+}
+
 func (r *ObservabilityOutboxRepo) FindAll(ctx context.Context, status outbox.StatusOutbox, limit int) ([]*outbox.Outbox, error) {
 	ctx, span := r.tracer.Start(ctx, "OutboxRepository.FindAllByStatusForUpdateSkipLocked")
 	defer span.End()

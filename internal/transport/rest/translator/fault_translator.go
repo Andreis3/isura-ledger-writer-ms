@@ -19,13 +19,20 @@ var TranslatorStatusCode = map[fault.Code]ProtocolError{
 	fault.CodeUnprocessableEntity:  {HTTPStatus: http.StatusUnprocessableEntity},
 	fault.CodeInternal:             {HTTPStatus: http.StatusInternalServerError},
 	fault.CodeUnknown:              {HTTPStatus: http.StatusInternalServerError},
-	fault.CodeDatabaseError:        {HTTPStatus: http.StatusInternalServerError},
+	fault.CodeDatabaseError:        {HTTPStatus: http.StatusServiceUnavailable},
 	fault.CodeCacheError:           {HTTPStatus: http.StatusInternalServerError},
-	fault.CodeExternalService:      {HTTPStatus: http.StatusBadGateway},
-	fault.CodeTimeoutError:         {HTTPStatus: http.StatusGatewayTimeout},
+	fault.CodeExternalService:      {HTTPStatus: http.StatusServiceUnavailable},
+	fault.CodeTimeoutError:         {HTTPStatus: http.StatusServiceUnavailable},
 	fault.CodeInvalidEntity:        {HTTPStatus: http.StatusBadRequest},
 	fault.CodeInvalidTransfer:      {HTTPStatus: http.StatusBadRequest},
-	fault.CodeInsufficientBalance:  {HTTPStatus: http.StatusBadRequest},
-	fault.CodeDuplicateTransaction: {HTTPStatus: http.StatusBadRequest},
+	fault.CodeInsufficientBalance:  {HTTPStatus: http.StatusUnprocessableEntity},
+	fault.CodeDuplicateTransaction: {HTTPStatus: http.StatusConflict},
 	fault.CodeAlreadyExists:        {HTTPStatus: http.StatusConflict},
+}
+
+func HTTPStatus(code fault.Code) int {
+	if protocolError, ok := TranslatorStatusCode[code]; ok {
+		return protocolError.HTTPStatus
+	}
+	return http.StatusInternalServerError
 }

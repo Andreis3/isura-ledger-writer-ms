@@ -44,6 +44,18 @@ type Nats struct {
 	Name     string       `mapstructure:"name"`
 	Subject  string       `mapstructure:"subject"`
 	Consumer NatsConsumer `mapstructure:"consumer"`
+	Relay    OutboxRelay  `mapstructure:"relay"`
+}
+
+type OutboxRelay struct {
+	Stream       string        `mapstructure:"stream"`
+	Subject      string        `mapstructure:"subject"`
+	DLQSubject   string        `mapstructure:"dlq_subject"`
+	BatchSize    int           `mapstructure:"batch_size"`
+	MaxWorkers   int           `mapstructure:"max_workers"`
+	MaxAttempts  int           `mapstructure:"max_attempts"`
+	PollInterval time.Duration `mapstructure:"poll_interval"`
+	RetryAfter   time.Duration `mapstructure:"retry_after"`
 }
 
 type NatsConsumer struct {
@@ -122,4 +134,12 @@ func bindEnvs() {
 	_ = viper.BindEnv("nats.consumer.max_deliver", "NATS_CONSUMER_MAX_DELIVER")
 	_ = viper.BindEnv("nats.consumer.max_workers", "NATS_CONSUMER_MAX_WORKERS")
 	_ = viper.BindEnv("nats.consumer.max_message_size", "NATS_CONSUMER_MAX_MESSAGE_SIZE")
+	_ = viper.BindEnv("nats.relay.stream", "NATS_RELAY_STREAM")
+	_ = viper.BindEnv("nats.relay.subject", "NATS_RELAY_SUBJECT")
+	_ = viper.BindEnv("nats.relay.dlq_subject", "NATS_RELAY_DLQ_SUBJECT")
+	_ = viper.BindEnv("nats.relay.batch_size", "NATS_RELAY_BATCH_SIZE")
+	_ = viper.BindEnv("nats.relay.max_workers", "NATS_RELAY_MAX_WORKERS")
+	_ = viper.BindEnv("nats.relay.max_attempts", "NATS_RELAY_MAX_ATTEMPTS")
+	_ = viper.BindEnv("nats.relay.poll_interval", "NATS_RELAY_POLL_INTERVAL")
+	_ = viper.BindEnv("nats.relay.retry_after", "NATS_RELAY_RETRY_AFTER")
 }

@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"os/signal"
 	"syscall"
@@ -25,6 +27,7 @@ func StartServersWithGracefulShutdown() {
 	httpSrv := NewHTTPServer(deps)
 
 	natsConsumer := NewNatsConsumerServer(deps, natsPublisher)
+	outboxRelay := composer.BuildOutboxRelay()
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -55,6 +58,15 @@ func StartServersWithGracefulShutdown() {
 		}
 	})
 
+	// Goroutine for the transactional outbox relay.
+	g.Go(func() error {
+		deps.Log.InfoText("Starting outbox relay...")
+		if err := outboxRelay.Run(ctx); err != nil {
+			return err
+		}
+		return nil
+	})
+
 	// Goroutine for the gRPC server
 	g.Go(func() error {
 		errCh := make(chan error, 1)
@@ -78,24 +90,17 @@ func StartServersWithGracefulShutdown() {
 
 	// Goroutine for the NATS Consumer worker
 	g.Go(func() error {
-		errCh := make(chan error, 1)
-		go func() {
-			deps.Log.InfoText("Starting NATS consumer...")
-			if err := natsConsumer.Start(ctx); err != nil {
-				errCh <- err
-			}
-		}()
-
-		select {
-		case <-ctx.Done():
-			deps.Log.InfoText("Shutting down NATS consumer...")
-			return nil
+		deps.Log.InfoText("Starting NATS consumer...")
+		if err := natsConsumer.Start(ctx); err != nil && ctx.Err() == nil {
+			return fmt.Errorf("run nats consumer: %w", err)
 		}
+		deps.Log.InfoText("Shutting down NATS consumer...")
+		return nil
 	})
 
 	// Waits for all to finish
 	if err := g.Wait(); err != nil {
-		deps.Log.InfoText("Servers stopped with error: %v", err)
+		deps.Log.ErrorText("servers stopped with error", slog.String("error", err.Error()))
 	}
 
 	// Closes infrastructure
@@ -104,7 +109,9 @@ func StartServersWithGracefulShutdown() {
 	defer closeCancel()
 	deps.Pg.Close()
 	deps.Prom.Close()
-	deps.TracerShutdown(closeCtx)
+	if err := deps.TracerShutdown(closeCtx); err != nil {
+		deps.Log.ErrorJSON("tracer shutdown failed", slog.String("error", err.Error()))
+	}
 	deps.Nats.Close()
 	deps.Log.InfoText("Infrastructure closed.")
 	deps.Log.InfoText("Shutdown complete.")

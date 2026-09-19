@@ -75,20 +75,20 @@ paths:
     post:
       summary: Cria uma transação (Partidas Dobradas)
       description: |
-        Realiza um lançamento contábil garantindo que a soma dos débitos seja exatamente igual à soma dos créditos.
-        Requer o uso do cabeçalho `Idempotency-Key` para evitar transações duplicadas em retentativas.
+        Confirma uma transferência balanceada com persistência transacional e idempotência.
+        A chave canônica fica no corpo; `Idempotency-Key` é um alias compatível quando o corpo não a informa.
       operationId: createTransaction
       tags:
         - Transactions
       parameters:
         - name: Idempotency-Key
           in: header
-          required: true
-          description: Chave de idempotência (UUID) para garantir que requisições repetidas não dupliquem a transação financeira.
+          required: false
+          description: Alias compatível para `idempotency_key`. Se ambos forem enviados, devem ser iguais.
           schema:
             type: string
-            format: uuid
-            example: "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+            maxLength: 50
+            example: "transfer-20260918-0001"
       requestBody:
         required: true
         content:
@@ -97,7 +97,13 @@ paths:
               $ref: '#/components/schemas/CreateTransactionRequest'
       responses:
         '201':
-          description: Transação efetuada com sucesso e persistida via Outbox Pattern.
+          description: Nova transferência confirmada e evento gravado na outbox.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionResponse'
+        '200':
+          description: Replay idempotente da mesma transferência.
           content:
             application/json:
               schema:
@@ -109,13 +115,19 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '422':
-          description: Regra de negócio violada (ex. Saldo insuficiente na conta de origem)
+          description: Regra financeira violada.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-        '500':
-          description: Erro interno do servidor (Database Tx falhou)
+        '409':
+          description: Chave de idempotência reutilizada com parâmetros diferentes.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Falha transitória de banco, outbox ou concorrência.
           content:
             application/json:
               schema:
@@ -217,38 +229,60 @@ components:
     CreateTransactionRequest:
       type: object
       required:
-        - description
-        - entries
+        - idempotency_key
+        - debit_account_id
+        - credit_account_id
+        - amount
+        - currency
+        - operation
       properties:
-        description:
+        idempotency_key:
           type: string
-          description: Histórico ou motivo da transação contábil.
-          example: "Transferência de Pagamento Fatura #1029"
-        entries:
-          type: array
-          minItems: 2
-          description: Lista de entradas (débitos e créditos). A soma dos débitos deve ser igual à soma dos créditos.
-          items:
-            $ref: '#/components/schemas/EntryRequest'
+          maxLength: 50
+          example: "transfer-20260918-0001"
+        debit_account_id:
+          type: string
+          format: uuid
+        credit_account_id:
+          type: string
+          format: uuid
+        amount:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Valor em centavos.
+          example: 150000
+        currency:
+          type: string
+          enum: [BRL, USD, EUR]
+        operation:
+          type: string
+          enum: [TRANSFER]
+        metadata:
+          type: object
+          maxProperties: 32
+          additionalProperties:
+            type: string
+            maxLength: 256
 
     TransactionResponse:
       type: object
+      required:
+        - transaction_id
+        - status
+        - idempotent_replay
       properties:
-        id:
+        transaction_id:
           type: string
           format: uuid
           example: "f47ac10b-58cc-4372-a567-0e02b2c3d479"
-        description:
-          type: string
-          example: "Transferência de Pagamento Fatura #1029"
         status:
           type: string
-          enum: [PENDING, COMPLETED, FAILED]
+          enum: [PENDING, COMPLETED]
           example: "COMPLETED"
-        created_at:
-          type: string
-          format: date-time
-          example: "2026-08-07T10:00:00Z"
+        idempotent_replay:
+          type: boolean
+          example: false
 
     HealthResponse:
       type: object
@@ -262,18 +296,20 @@ components:
 
     ErrorResponse:
       type: object
+      required: [error]
       properties:
-        code_error:
-          type: string
-          description: Código de erro interno da aplicação.
-        cause:
-          type: string
-          description: Causa técnica do erro (quando aplicável).
-        error_fields:
+        error:
           type: object
-          description: Detalhes dos campos que falharam na validação.
-          additionalProperties:
-            type: string
-        friendly_message:
-          type: string
-          description: Mensagem amigável sobre o erro.
+          required: [code, message, retryable]
+          properties:
+            code:
+              type: string
+              example: ILMS-1005
+            message:
+              type: string
+              example: Idempotency key was already used with different parameters.
+            retryable:
+              type: boolean
+            fields:
+              type: object
+              additionalProperties: true

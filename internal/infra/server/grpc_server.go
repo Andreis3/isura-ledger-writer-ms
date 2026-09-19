@@ -4,11 +4,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"os"
 	"time"
 
 	"github.com/andreis3/isura-ledger-ms/internal/application/command"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/dependency"
+	"github.com/andreis3/isura-ledger-ms/internal/infra/postgres/uow"
 	"github.com/andreis3/isura-ledger-ms/internal/transport/grpc/handler"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
@@ -42,6 +42,7 @@ func (s *GRPCServer) Start() error {
 			interceptor.TracingInterceptor(s.deps.Tracer),
 		),
 	)
+	s.grpcServer = grpcServer
 
 	// registers all modules
 	registry := grpcTransport.NewServerRegistry(grpcServer, grpcTransport.NewLedgerModule(s.buildLedgerServer()))
@@ -57,7 +58,7 @@ func (s *GRPCServer) Start() error {
 	if err != nil {
 		s.deps.Log.CriticalText("grpc server failed to listen",
 			slog.String("error", err.Error()))
-		os.Exit(1)
+		return fmt.Errorf("listen grpc server: %w", err)
 	}
 
 	if err := grpcServer.Serve(lis); err != nil {
@@ -78,12 +79,22 @@ func (s *GRPCServer) buildLedgerServer() *grpcTransport.LedgerServer {
 
 	// use cases
 	createAccount := command.NewCreateAccount(accountRepo, publisher, s.deps.Log, s.deps.Tracer, s.deps.Prom)
+	createTransaction := command.NewCreateTransaction(
+		uow.NewUnitOfWork(s.deps.Pg.Pool()),
+		accountRepo,
+		composer.BuildTransactionRepo(),
+		composer.BuildOutboxRepo(),
+		s.deps.Tracer,
+		s.deps.Log,
+		s.deps.Prom,
+	)
 
 	// handlers
 	createAccountHandler := handler.NewCreateAccountHandler(createAccount, s.deps.Log, s.deps.Tracer)
+	createTransactionHandler := handler.NewCreateTransactionHandler(createTransaction, s.deps.Log, s.deps.Tracer)
 
 	// server
-	ledgerServer := grpcTransport.NewLedgerServer(createAccountHandler)
+	ledgerServer := grpcTransport.NewLedgerServer(createAccountHandler, createTransactionHandler)
 
 	// server
 	return ledgerServer

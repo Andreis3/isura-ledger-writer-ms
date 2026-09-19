@@ -21,7 +21,7 @@ var _ = Describe("INTERNAL :: DOMAIN :: TRANSACTION :: TRANSACTION", func() {
 					WithID(id.String()).
 					WithIdempotencyKey("any_idempotency_key").
 					WithAmount(amount).
-					WithOperation(transaction.OperationTransfer).
+					WithOperation(transaction.OperationDeposit).
 					Build()
 				Expect(err).To(BeNil())
 				Expect(trans).NotTo(BeNil())
@@ -47,7 +47,7 @@ var _ = Describe("INTERNAL :: DOMAIN :: TRANSACTION :: TRANSACTION", func() {
 					WithID(id.String()).
 					WithIdempotencyKey("any_idempotency_key").
 					WithAmount(amount).
-					WithOperation(transaction.OperationTransfer).
+					WithOperation(transaction.OperationDeposit).
 					WithEntries([]*transaction.Entry{entry}).
 					Build()
 
@@ -89,7 +89,7 @@ var _ = Describe("INTERNAL :: DOMAIN :: TRANSACTION :: TRANSACTION", func() {
 					WithID(id.String()).
 					WithIdempotencyKey("any_idempotency_key").
 					WithAmount(amount).
-					WithOperation(transaction.OperationTransfer).
+					WithOperation(transaction.OperationDeposit).
 					WithEntries([]*transaction.Entry{entry, entry2, entry3}).
 					Build()
 
@@ -121,7 +121,7 @@ var _ = Describe("INTERNAL :: DOMAIN :: TRANSACTION :: TRANSACTION", func() {
 					WithID(id.String()).
 					WithIdempotencyKey("any_idempotency_key").
 					WithAmount(amount).
-					WithOperation(transaction.OperationTransfer).
+					WithOperation(transaction.OperationDeposit).
 					WithEntries([]*transaction.Entry{entry, entry2}).
 					Build()
 
@@ -154,7 +154,7 @@ var _ = Describe("INTERNAL :: DOMAIN :: TRANSACTION :: TRANSACTION", func() {
 					WithID(id.String()).
 					WithIdempotencyKey("any_idempotency_key").
 					WithAmount(amount).
-					WithOperation(transaction.OperationTransfer).
+					WithOperation(transaction.OperationDeposit).
 					WithEntries([]*transaction.Entry{entry, entry2}).
 					Build()
 
@@ -173,7 +173,7 @@ var _ = Describe("INTERNAL :: DOMAIN :: TRANSACTION :: TRANSACTION", func() {
 					WithID(id.String()).
 					WithIdempotencyKey("any_idempotency_key").
 					WithAmount(amount).
-					WithOperation(transaction.OperationTransfer).
+					WithOperation(transaction.OperationDeposit).
 					WithStatus(transaction.Pending).
 					Build()
 				err := trans.Complete()
@@ -190,7 +190,7 @@ var _ = Describe("INTERNAL :: DOMAIN :: TRANSACTION :: TRANSACTION", func() {
 					WithID(id.String()).
 					WithIdempotencyKey("any_idempotency_key").
 					WithAmount(amount).
-					WithOperation(transaction.OperationTransfer).
+					WithOperation(transaction.OperationDeposit).
 					WithStatus(transaction.Completed).
 					Build()
 				err := trans.Complete()
@@ -209,7 +209,7 @@ var _ = Describe("INTERNAL :: DOMAIN :: TRANSACTION :: TRANSACTION", func() {
 					WithID(id.String()).
 					WithIdempotencyKey("any_idempotency_key").
 					WithAmount(amount).
-					WithOperation(transaction.OperationTransfer).
+					WithOperation(transaction.OperationDeposit).
 					WithStatus(transaction.Pending).
 					Build()
 				err := trans.Fail()
@@ -226,7 +226,7 @@ var _ = Describe("INTERNAL :: DOMAIN :: TRANSACTION :: TRANSACTION", func() {
 					WithID(id.String()).
 					WithIdempotencyKey("any_idempotency_key").
 					WithAmount(amount).
-					WithOperation(transaction.OperationTransfer).
+					WithOperation(transaction.OperationDeposit).
 					WithStatus(transaction.Completed).
 					Build()
 				err := trans.Fail()

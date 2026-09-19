@@ -23,4 +23,5 @@ var (
 	ErrTransactionNotFound  = &DomainError{Code: CodeNotFound, FriendlyMessage: "transaction not found"}
 	ErrInvalidAmount        = &DomainError{Code: CodeBadRequest, FriendlyMessage: "invalid amount"}
 	ErrDuplicateTransaction = &DomainError{Code: CodeConflict, FriendlyMessage: "transaction already exists"}
+	ErrIdempotencyConflict  = &DomainError{Code: CodeDuplicateTransaction, FriendlyMessage: "idempotency key was already used with different parameters"}
 )

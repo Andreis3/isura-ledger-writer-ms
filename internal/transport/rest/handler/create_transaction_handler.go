@@ -1,11 +1,13 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/andreis3/isura-ledger-ms/internal/application"
 	"github.com/andreis3/isura-ledger-ms/internal/application/command"
 	"github.com/andreis3/isura-ledger-ms/internal/application/dto"
+	"github.com/andreis3/isura-ledger-ms/internal/domain/fault"
 	"github.com/andreis3/isura-ledger-ms/internal/transport/rest/decoder"
 )
 
@@ -36,6 +38,11 @@ func (h *CreateTransactionHandler) Handle(w http.ResponseWriter, r *http.Request
 		decoder.ResponseError(w, err)
 		return
 	}
+	if err := applyIdempotencyHeader(r, &input); err != nil {
+		span.RecordError(err)
+		decoder.ResponseError(w, err)
+		return
+	}
 
 	response, err := h.useCase.Execute(ctx, input)
 	if err != nil {
@@ -44,6 +51,26 @@ func (h *CreateTransactionHandler) Handle(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	decoder.ResponseSuccess[dto.CreateTransactionOutput](w, http.StatusCreated, *response)
+	statusCode := http.StatusCreated
+	if response.IdempotentReplay {
+		statusCode = http.StatusOK
+	}
+	decoder.ResponseSuccess[dto.CreateTransactionOutput](w, statusCode, *response)
 
+}
+
+func applyIdempotencyHeader(r *http.Request, input *dto.CreateTransactionInput) error {
+	headerKey := r.Header.Get("Idempotency-Key")
+	if headerKey == "" {
+		return nil
+	}
+	if input.IdempotencyKey != nil && *input.IdempotencyKey != headerKey {
+		return fault.InvalidEntityError(errors.New("idempotency key differs between header and body"), map[string]any{
+			"idempotency_key": "header and body values must match",
+		})
+	}
+	if input.IdempotencyKey == nil {
+		input.IdempotencyKey = &headerKey
+	}
+	return nil
 }

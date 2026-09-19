@@ -88,7 +88,7 @@ func main() {
 		buf.WriteString(debitAccountID)
 		buf.WriteString(`", "credit_account_id": "`)
 		buf.WriteString(creditAccountID)
-		buf.WriteString(`", "operation": "PIX_IN", "amount": 10000, "currency": "BRL"}`)
+		buf.WriteString(`", "operation": "TRANSFER", "amount": 10000, "currency": "BRL"}`)
 
 		tgt.Body = append([]byte(nil), buf.Bytes()...)
 		bufferPool.Put(buf)

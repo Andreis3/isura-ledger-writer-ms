@@ -11,6 +11,11 @@ table "transactions" {
     null = false
   }
 
+  column "request_fingerprint" {
+    type = char(64)
+    null = false
+  }
+
   column "status" {
     type = varchar(20)
     null = false
@@ -29,6 +34,11 @@ table "transactions" {
   column "operation" {
     type = varchar(30)
     null = false
+  }
+
+  column "metadata" {
+    type = jsonb
+    null = true
   }
 
   column "created_at" {
@@ -56,5 +66,9 @@ table "transactions" {
 
   index "idx_transactions_operation" {
     columns = [column.operation]
+  }
+
+  check "transactions_amount_positive" {
+    expr = "amount > 0"
   }
 }

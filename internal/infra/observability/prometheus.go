@@ -24,6 +24,9 @@ type Prometheus struct {
 	ledgerTransactionsTotal               api.Int64Counter // {status: completed|failed}
 	ledgerCommandDurationMilliseconds     api.Float64Histogram
 	ledgerCommandTotal                    api.Int64Counter
+	ledgerIdempotencyTotal                api.Int64Counter
+	ledgerConcurrencyRetriesTotal         api.Int64Counter
+	ledgerOutboxTotal                     api.Int64Counter
 }
 
 func NewPrometheus() (*Prometheus, error) {
@@ -94,6 +97,22 @@ func NewPrometheus() (*Prometheus, error) {
 		return nil, err
 	}
 
+	ledgerIdempotencyTotal, err := meter.Int64Counter("ledger_idempotency_total",
+		api.WithDescription("Total idempotency results"))
+	if err != nil {
+		return nil, err
+	}
+	ledgerConcurrencyRetriesTotal, err := meter.Int64Counter("ledger_concurrency_retries_total",
+		api.WithDescription("Total transaction concurrency retries"))
+	if err != nil {
+		return nil, err
+	}
+	ledgerOutboxTotal, err := meter.Int64Counter("ledger_outbox_total",
+		api.WithDescription("Total outbox events by status and type"))
+	if err != nil {
+		return nil, err
+	}
+
 	return &Prometheus{
 		provider:                              meterProviderInstance,
 		ledgerRequestsTotal:                   ledgerRequestsTotal,
@@ -102,6 +121,9 @@ func NewPrometheus() (*Prometheus, error) {
 		ledgerTransactionsTotal:               ledgerTransactionsTotal,
 		ledgerCommandDurationMilliseconds:     ledgerCommandDurationMilliseconds,
 		ledgerCommandTotal:                    ledgerCommandTotal,
+		ledgerIdempotencyTotal:                ledgerIdempotencyTotal,
+		ledgerConcurrencyRetriesTotal:         ledgerConcurrencyRetriesTotal,
+		ledgerOutboxTotal:                     ledgerOutboxTotal,
 	}, nil
 }
 
@@ -150,6 +172,21 @@ func (p *Prometheus) RecordCommandDuration(command string, duration float64) {
 	opt := api.WithAttributes(
 		attribute.Key("command").String(command))
 	p.ledgerCommandDurationMilliseconds.Record(context.Background(), duration, opt)
+}
+
+func (p *Prometheus) RecordIdempotencyTotal(result string) {
+	p.ledgerIdempotencyTotal.Add(context.Background(), 1, api.WithAttributes(attribute.Key("result").String(result)))
+}
+
+func (p *Prometheus) RecordConcurrencyRetry() {
+	p.ledgerConcurrencyRetriesTotal.Add(context.Background(), 1)
+}
+
+func (p *Prometheus) RecordOutboxTotal(status, eventType string) {
+	p.ledgerOutboxTotal.Add(context.Background(), 1, api.WithAttributes(
+		attribute.Key("status").String(status),
+		attribute.Key("event_type").String(eventType),
+	))
 }
 
 func (p *Prometheus) Close() {

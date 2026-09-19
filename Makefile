@@ -4,6 +4,8 @@ DOCKER_COMPOSE = docker compose
 SERVICE_NAME = ledger
 DB_URL  = postgres://admin:admin@localhost:5432/isura_ledger_main?sslmode=disable
 SCHEMA_DIR = db
+BUSINESS_COVERPKG = ./internal/application/...,./internal/domain/...
+BUSINESS_UNIT_PACKAGES = ./tests/unit/application/... ./tests/unit/domain/...
 
 # ── Variáveis de Teste de Carga (Vegeta) ─────────────────────
 PATH_VEGETA ?= ./vegeta/account/create_account.go
@@ -29,8 +31,12 @@ help:
 	@echo "   make unit             - Roda os testes unitários básicos"
 	@echo "   make unit-verbose     - Roda os testes unitários via Ginkgo com race detector"
 	@echo "   make unit-cover       - Roda testes unitários medindo cobertura"
+	@echo "   make unit-cover-business - Mede cobertura de application e domain"
 	@echo "   make unit-report      - Gera relatório HTML e de funções da cobertura"
 	@echo "   make vet              - Executa análise estática no entrypoint do servidor"
+	@echo ""
+	@echo " [ Testes Integração ]"
+	@echo "   make integration-tests - Roda os testes unitários básicos"
 	@echo ""
 	@echo " [ Testes de Carga (Vegeta) ]"
 	@echo "   make test-load        - Roda teste de carga (Variáveis: PATH_VEGETA, URL, RATE, CONNECTIONS, WORKERS, DURATION) "
@@ -66,19 +72,27 @@ air:
 	@air -c .air.toml
 
 unit:
-	@go test ./tests/unit/... --tags=unit -v
+	@go test ./tests/unit/... ./internal/infra/nats/... ./internal/infra/postgres/uow/... --tags=unit -v
 
 unit-verbose:
-	ginkgo -r --race --tags=unit --randomize-all --randomize-suites --fail-on-pending
+	ginkgo -r -v --no-color --race --tags=unit --randomize-all --randomize-suites --fail-on-pending ./tests/unit/... ./internal/infra/nats/... ./internal/infra/postgres/uow/...
 
 unit-cover:
 	@go test ./tests/unit/... -coverpkg ./internal/... --tags=unit
+
+unit-cover-business:
+	@mkdir -p coverage
+	@go test $(BUSINESS_UNIT_PACKAGES) --tags=unit -coverpkg=$(BUSINESS_COVERPKG) -coverprofile=coverage/business.out
+	@go tool cover -func=coverage/business.out | tail -n 1
 
 unit-report:
 	mkdir -p "coverage" \
 	&& go test ./tests/unit/... -coverprofile=coverage/cover.out -coverpkg ./internal/... --tags=unit \
 	&& go tool cover -html=coverage/cover.out -o coverage/cover.html \
 	&& go tool cover -func=coverage/cover.out -o coverage/cover.functions.html
+
+integration-tests:
+	@go test ./tests/integration/... --tags=integration -v -count=1
 
 vet:
 	@go vet ./cmd/server/main.go
@@ -153,4 +167,5 @@ migrate:
 		run-race,
 		test-load,
 		help,
-		vet
+		vet,
+		integration-tests

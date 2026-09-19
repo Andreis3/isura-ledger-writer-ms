@@ -39,6 +39,7 @@ type EntryBuilder struct {
 	direction         Direction
 	amount            money.Money
 	createdAt         time.Time
+	metadata          map[string]string
 	eval              validator.Evaluator
 }
 
@@ -51,9 +52,12 @@ type Entry struct {
 	AccountID         string
 	AccountExternalID string
 	TransactionID     string
+	SequenceNumber    int64
+	RunningBalance    int64
 	Direction         Direction
 	Amount            money.Money
 	CreatedAt         time.Time
+	Metadata          map[string]string
 }
 
 func (b *EntryBuilder) WithID(id ...string) *EntryBuilder {
@@ -119,6 +123,15 @@ func (b *EntryBuilder) WithCreatedAt(createdAt ...time.Time) *EntryBuilder {
 	return b
 }
 
+// WithMetadata stores a copy of the authorized metadata on the historical entry.
+func (b *EntryBuilder) WithMetadata(metadata map[string]string) *EntryBuilder {
+	if metadata == nil {
+		return b
+	}
+	b.metadata = cloneMetadata(metadata)
+	return b
+}
+
 func (b *EntryBuilder) Build() (*Entry, error) {
 	if len(b.eval) > 0 {
 		return nil, fault.InvalidEntityError(errors.New("invalid entry entity"), b.eval)
@@ -133,6 +146,7 @@ func (b *EntryBuilder) Build() (*Entry, error) {
 		Direction:         b.direction,
 		Amount:            b.amount,
 		CreatedAt:         shared.CoalesceTime(b.createdAt, now),
+		Metadata:          cloneMetadata(b.metadata),
 	}, nil
 }
 
@@ -140,6 +154,21 @@ func (e *Entry) AddAccountID(acountID string) {
 	e.AccountID = acountID
 }
 
-func (e *Entry) AddTransnactionID(transactionID string) {
+// SetSequenceNumber records the immutable sequence assigned by the ledger for this account.
+func (e *Entry) SetSequenceNumber(sequence int64) {
+	e.SequenceNumber = sequence
+}
+
+// SetRunningBalance records the balance after this entry is applied to its account.
+func (e *Entry) SetRunningBalance(balance int64) {
+	e.RunningBalance = balance
+}
+
+// AddTransactionID associates the entry with its immutable parent transaction.
+func (e *Entry) AddTransactionID(transactionID string) {
 	e.TransactionID = transactionID
+}
+
+func (e *Entry) AddTransnactionID(transactionID string) {
+	e.AddTransactionID(transactionID)
 }

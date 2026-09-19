@@ -54,15 +54,15 @@ func (h *CreateAccountHandler) Handle(ctx context.Context, req *pb.CreateAccount
 
 func (h *CreateAccountHandler) AccountTypeTranslate(req *pb.CreateAccountRequest) account.Type {
 	switch req.GetAccountType() {
-	case pb.AccountType_TYPE_ASSET:
+	case pb.AccountType_ACCOUNT_TYPE_ASSET:
 		return account.Asset
-	case pb.AccountType_TYPE_LIABILITY:
+	case pb.AccountType_ACCOUNT_TYPE_LIABILITY:
 		return account.Liability
-	case pb.AccountType_TYPE_EQUITY:
+	case pb.AccountType_ACCOUNT_TYPE_EQUITY:
 		return account.Equity
-	case pb.AccountType_TYPE_REVENUE:
+	case pb.AccountType_ACCOUNT_TYPE_REVENUE:
 		return account.Revenue
-	case pb.AccountType_TYPE_EXPENSE:
+	case pb.AccountType_ACCOUNT_TYPE_EXPENSE:
 		return account.Expense
 	default:
 		return ""
