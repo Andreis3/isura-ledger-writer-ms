@@ -205,7 +205,7 @@ var _ = ginkgo.Describe("transaction repository", ginkgo.Ordered, func() {
 
 	ginkgo.It("enforces positive amounts and valid directions in the database", func() {
 		accountA, accountB := insertAccounts(ctx, tx)
-		_, err := tx.Exec(ctx, `INSERT INTO entries (id, account_id, transaction_id, account_sequence, direction, amount, currency, created_at) VALUES ($1, $2, $3, 1, 'INVALID', 0, 'BRL', $4)`, uuid.NewString(), accountA, uuid.NewString(), time.Now())
+		_, err := tx.Exec(ctx, `INSERT INTO entries (id, account_id, transaction_id, sequence_number, direction, amount, running_balance, currency, created_at) VALUES ($1, $2, $3, 1, 'INVALID', 0, 0, 'BRL', $4)`, uuid.NewString(), accountA, uuid.NewString(), time.Now())
 		gomega.Expect(err).To(gomega.HaveOccurred())
 		_ = accountB
 	})
@@ -219,6 +219,12 @@ var _ = ginkgo.Describe("transaction repository", ginkgo.Ordered, func() {
 		var debit, credit int64
 		gomega.Expect(tx.QueryRow(ctx, "SELECT COALESCE(sum(amount) FILTER (WHERE direction = 'DEBIT'), 0), COALESCE(sum(amount) FILTER (WHERE direction = 'CREDIT'), 0) FROM entries WHERE transaction_id = $1", entityTransaction.ID.String()).Scan(&debit, &credit)).To(gomega.Succeed())
 		gomega.Expect(debit).To(gomega.Equal(credit))
+
+		var debitBalance, creditBalance int64
+		gomega.Expect(tx.QueryRow(ctx, "SELECT running_balance FROM entries WHERE account_id = $1", accountA).Scan(&debitBalance)).To(gomega.Succeed())
+		gomega.Expect(tx.QueryRow(ctx, "SELECT running_balance FROM entries WHERE account_id = $1", accountB).Scan(&creditBalance)).To(gomega.Succeed())
+		gomega.Expect(debitBalance).To(gomega.Equal(int64(-1500)))
+		gomega.Expect(creditBalance).To(gomega.Equal(int64(1500)))
 	})
 
 	ginkgo.It("does not expose mutation methods for confirmed ledger facts", func() {
@@ -267,7 +273,7 @@ var _ = ginkgo.Describe("transaction repository", ginkgo.Ordered, func() {
 			gomega.Expect(err).NotTo(gomega.HaveOccurred())
 		}
 
-		rows, err := pool.Query(ctx, `SELECT account_sequence FROM entries WHERE account_id = $1 ORDER BY account_sequence`, sharedAccount)
+		rows, err := pool.Query(ctx, `SELECT sequence_number FROM entries WHERE account_id = $1 ORDER BY sequence_number`, sharedAccount)
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 		defer rows.Close()
 		sequences := make([]int64, 0, 2)

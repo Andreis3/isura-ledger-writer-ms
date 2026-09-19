@@ -75,7 +75,7 @@ func TestIsConcurrencyConflictOnlyClassifiesSupportedPostgresErrors(t *testing.T
 	}{
 		{name: "serialization", err: &pgconn.PgError{Code: "40001"}, retryable: true},
 		{name: "deadlock", err: &pgconn.PgError{Code: "40P01"}, retryable: true},
-		{name: "account sequence", err: &pgconn.PgError{Code: "23505", ConstraintName: "unique_account_sequence"}, retryable: true},
+		{name: "entry sequence number", err: &pgconn.PgError{Code: "23505", ConstraintName: "unique_entry_sequence_number"}, retryable: true},
 		{name: "idempotency collision", err: &pgconn.PgError{Code: "23505", ConstraintName: "transactions_idempotency_key_key"}, retryable: false},
 		{name: "other unique constraint", err: &pgconn.PgError{Code: "23505", ConstraintName: "accounts_account_number_key"}, retryable: false},
 	}

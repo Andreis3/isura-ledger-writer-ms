@@ -123,7 +123,7 @@ func isConcurrencyConflict(err error) bool {
 	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 		return pgErr.Code == "40001" ||
 			pgErr.Code == "40P01" ||
-			(pgErr.Code == "23505" && pgErr.ConstraintName == "unique_account_sequence")
+			(pgErr.Code == "23505" && pgErr.ConstraintName == "unique_entry_sequence_number")
 	}
 	return false
 }

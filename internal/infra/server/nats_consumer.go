@@ -80,7 +80,9 @@ func (c *NatsConsumerServer) Start(ctx context.Context) error {
 				c.processJob(msgCtx, msg)
 			}()
 		case <-ctx.Done():
-			_ = msg.Nak()
+			if err := msg.Nak(); err != nil {
+				c.dep.Log.ErrorJSON("failed to negatively acknowledge message", "error", err.Error())
+			}
 			return
 		}
 	})
@@ -166,7 +168,9 @@ func (c *NatsConsumerServer) processJob(ctx context.Context, msg jetstream.Msg) 
 			}
 
 			c.publishToDLQ(workerCtx, msg, err)
-			_ = msg.TermWithReason(reason)
+			if termErr := msg.TermWithReason(reason); termErr != nil {
+				c.dep.Log.ErrorJSON("failed to terminate message", "error", termErr.Error())
+			}
 			return
 		}
 
@@ -178,11 +182,15 @@ func (c *NatsConsumerServer) processJob(ctx context.Context, msg jetstream.Msg) 
 			delay = backoffDelay(metadata.NumDelivered)
 		}
 
-		_ = msg.NakWithDelay(delay)
+		if nakErr := msg.NakWithDelay(delay); nakErr != nil {
+			c.dep.Log.ErrorJSON("failed to negatively acknowledge message with delay", "error", nakErr.Error())
+		}
 		return
 	}
 
-	_ = msg.Ack()
+	if ackErr := msg.Ack(); ackErr != nil {
+		c.dep.Log.ErrorJSON("failed to acknowledge message", "error", ackErr.Error())
+	}
 }
 
 func (c *NatsConsumerServer) publishToDLQ(ctx context.Context, msg jetstream.Msg, err error) {

@@ -52,7 +52,8 @@ type Entry struct {
 	AccountID         string
 	AccountExternalID string
 	TransactionID     string
-	AccountSequence   int64
+	SequenceNumber    int64
+	RunningBalance    int64
 	Direction         Direction
 	Amount            money.Money
 	CreatedAt         time.Time
@@ -153,9 +154,14 @@ func (e *Entry) AddAccountID(acountID string) {
 	e.AccountID = acountID
 }
 
-// SetAccountSequence records the immutable sequence assigned by the ledger for this account.
-func (e *Entry) SetAccountSequence(sequence int64) {
-	e.AccountSequence = sequence
+// SetSequenceNumber records the immutable sequence assigned by the ledger for this account.
+func (e *Entry) SetSequenceNumber(sequence int64) {
+	e.SequenceNumber = sequence
+}
+
+// SetRunningBalance records the balance after this entry is applied to its account.
+func (e *Entry) SetRunningBalance(balance int64) {
+	e.RunningBalance = balance
 }
 
 // AddTransactionID associates the entry with its immutable parent transaction.

@@ -7,16 +7,16 @@ table "entries" {
   }
 
   column "account_id" {
-        type = text
-        null = false
+    type = text
+    null = false
   }
 
   column "transaction_id" {
-      type = text
-      null = false
+    type = text
+    null = false
   }
 
-  column "account_sequence" {
+  column "sequence_number" {
     type = bigint
     null = false
   }
@@ -31,8 +31,13 @@ table "entries" {
     null = false
   }
 
+  column "running_balance" {
+    type = bigint
+    null = false
+  }
+
   column "currency" {
-    type = varchar(5)
+    type = varchar(3)
     null = false
   }
 
@@ -42,21 +47,21 @@ table "entries" {
   }
 
   column "created_at" {
-        type = timestamptz
-        null = false
+    type = timestamptz
+    null = false
   }
 
   primary_key {
     columns = [column.id]
   }
 
-  foreign_key "fk_account_id" {
-    columns = [column.account_id]
+  foreign_key "fk_entries_account_id" {
+    columns     = [column.account_id]
     ref_columns = [table.accounts.column.id]
   }
 
-  foreign_key "fk_transactios_id" {
-    columns = [column.transaction_id]
+  foreign_key "fk_entries_transaction_id" {
+    columns     = [column.transaction_id]
     ref_columns = [table.transactions.column.id]
   }
 
@@ -64,8 +69,18 @@ table "entries" {
     columns = [column.transaction_id]
   }
 
-  index "unique_account_sequence" {
-    columns = [column.account_id, column.account_sequence]
+  index "idx_entries_sequence_number_desc" {
+    columns = [
+      column.account_id,
+      column.sequence_number,
+    ]
+  }
+
+  index "unique_entry_sequence_number" {
+    columns = [
+      column.account_id,
+      column.sequence_number,
+    ]
     unique = true
   }
 
@@ -73,7 +88,15 @@ table "entries" {
     expr = "amount > 0"
   }
 
+  check "entries_sequence_number_positive" {
+    expr = "sequence_number > 0"
+  }
+
   check "entries_direction_valid" {
-    expr = "((direction)::text = ANY ((ARRAY['DEBIT'::character varying, 'CREDIT'::character varying])::text[]))"
+    expr = "direction IN ('DEBIT', 'CREDIT')"
+  }
+
+  check "entries_currency_valid" {
+    expr = "char_length(currency) = 3"
   }
 }

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"os"
 	"time"
 
 	"github.com/andreis3/isura-ledger-ms/internal/application/command"
@@ -59,7 +58,7 @@ func (s *GRPCServer) Start() error {
 	if err != nil {
 		s.deps.Log.CriticalText("grpc server failed to listen",
 			slog.String("error", err.Error()))
-		os.Exit(1)
+		return fmt.Errorf("listen grpc server: %w", err)
 	}
 
 	if err := grpcServer.Serve(lis); err != nil {

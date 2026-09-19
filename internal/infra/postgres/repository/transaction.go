@@ -57,14 +57,15 @@ func (r *TransactionRepository) Save(ctx context.Context, data *transaction.Tran
 		}
 		batch.Queue(`
 			INSERT INTO entries
-				(id, account_id, transaction_id, account_sequence, direction, amount, currency, metadata, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+				(id, account_id, transaction_id, sequence_number, direction, amount, running_balance, currency, metadata, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
 			entryModel.ID,
 			entryModel.AccountID,
 			entryModel.TransactionID,
-			entryModel.AccountSequence,
+			entryModel.SequenceNumber,
 			entryModel.Direction,
 			entryModel.Amount,
+			entryModel.RunningBalance,
 			entryModel.Currency,
 			entryModel.Metadata,
 			entryModel.CreatedAt,
@@ -86,17 +87,25 @@ func (r *TransactionRepository) Save(ctx context.Context, data *transaction.Tran
 }
 
 func (r *TransactionRepository) assignSequences(ctx context.Context, entries []*transaction.Entry) error {
+	type accountLedgerState struct {
+		nextSequence   int64
+		runningBalance int64
+	}
+
 	ordered := append([]*transaction.Entry(nil), entries...)
 	sort.SliceStable(ordered, func(i, j int) bool {
 		return ordered[i].AccountID < ordered[j].AccountID
 	})
 
 	db := resolveDB(ctx, r.db)
-	nextByAccount := make(map[string]int64, len(ordered))
+	stateByAccount := make(map[string]accountLedgerState, len(ordered))
 	for _, entry := range ordered {
-		if _, ok := nextByAccount[entry.AccountID]; ok {
-			nextByAccount[entry.AccountID]++
-			entry.SetAccountSequence(nextByAccount[entry.AccountID])
+		if state, ok := stateByAccount[entry.AccountID]; ok {
+			state.nextSequence++
+			state.runningBalance = applyEntryToBalance(state.runningBalance, entry)
+			stateByAccount[entry.AccountID] = state
+			entry.SetSequenceNumber(state.nextSequence)
+			entry.SetRunningBalance(state.runningBalance)
 			continue
 		}
 
@@ -104,17 +113,29 @@ func (r *TransactionRepository) assignSequences(ctx context.Context, entries []*
 		if err := db.QueryRow(ctx, `SELECT id FROM accounts WHERE id = $1 FOR UPDATE`, entry.AccountID).Scan(&accountID); err != nil {
 			return err
 		}
-		var next int64
+		var lastSequence, lastBalance int64
 		if err := db.QueryRow(ctx, `
-			SELECT COALESCE(MAX(account_sequence), 0) + 1
+			SELECT sequence_number, running_balance
 			FROM entries
-			WHERE account_id = $1`, entry.AccountID).Scan(&next); err != nil {
+			WHERE account_id = $1
+			ORDER BY sequence_number DESC
+			LIMIT 1`, entry.AccountID).Scan(&lastSequence, &lastBalance); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
-		nextByAccount[entry.AccountID] = next
-		entry.SetAccountSequence(next)
+		next := lastSequence + 1
+		balance := applyEntryToBalance(lastBalance, entry)
+		stateByAccount[entry.AccountID] = accountLedgerState{nextSequence: next, runningBalance: balance}
+		entry.SetSequenceNumber(next)
+		entry.SetRunningBalance(balance)
 	}
 	return nil
+}
+
+func applyEntryToBalance(balance int64, entry *transaction.Entry) int64 {
+	if entry.Direction == transaction.Debit {
+		return balance - entry.Amount.Amount()
+	}
+	return balance + entry.Amount.Amount()
 }
 
 func (r *TransactionRepository) Find(ctx context.Context, params criteria.TransactionCriteria) (*transaction.Transaction, error) {
@@ -158,11 +179,11 @@ func (r *TransactionRepository) findEntries(ctx context.Context, transactionID s
 	}
 	db := resolveDB(ctx, r.db)
 	rows, err := db.Query(ctx, `
-		SELECT id, account_id, transaction_id, account_sequence, direction, amount,
-			currency, metadata, created_at
+		SELECT id, account_id, transaction_id, sequence_number, direction, amount,
+			running_balance, currency, metadata, created_at
 		FROM entries
 		WHERE transaction_id = $1
-		ORDER BY account_sequence`, transactionID)
+		ORDER BY sequence_number`, transactionID)
 	if err != nil {
 		return nil, err
 	}
@@ -175,9 +196,10 @@ func (r *TransactionRepository) findEntries(ctx context.Context, transactionID s
 			&entryModel.ID,
 			&entryModel.AccountID,
 			&entryModel.TransactionID,
-			&entryModel.AccountSequence,
+			&entryModel.SequenceNumber,
 			&entryModel.Direction,
 			&entryModel.Amount,
+			&entryModel.RunningBalance,
 			&entryModel.Currency,
 			&entryModel.Metadata,
 			&entryModel.CreatedAt,
