@@ -4,6 +4,8 @@ DOCKER_COMPOSE = docker compose
 SERVICE_NAME = ledger
 DB_URL  = postgres://admin:admin@localhost:5432/isura_ledger_main?sslmode=disable
 SCHEMA_DIR = db
+BUSINESS_COVERPKG = ./internal/application/...,./internal/domain/...
+BUSINESS_UNIT_PACKAGES = ./tests/unit/application/... ./tests/unit/domain/...
 
 # ── Variáveis de Teste de Carga (Vegeta) ─────────────────────
 PATH_VEGETA ?= ./vegeta/account/create_account.go
@@ -29,6 +31,7 @@ help:
 	@echo "   make unit             - Roda os testes unitários básicos"
 	@echo "   make unit-verbose     - Roda os testes unitários via Ginkgo com race detector"
 	@echo "   make unit-cover       - Roda testes unitários medindo cobertura"
+	@echo "   make unit-cover-business - Mede cobertura de application e domain"
 	@echo "   make unit-report      - Gera relatório HTML e de funções da cobertura"
 	@echo "   make vet              - Executa análise estática no entrypoint do servidor"
 	@echo ""
@@ -76,6 +79,11 @@ unit-verbose:
 
 unit-cover:
 	@go test ./tests/unit/... -coverpkg ./internal/... --tags=unit
+
+unit-cover-business:
+	@mkdir -p coverage
+	@go test $(BUSINESS_UNIT_PACKAGES) --tags=unit -coverpkg=$(BUSINESS_COVERPKG) -coverprofile=coverage/business.out
+	@go tool cover -func=coverage/business.out | tail -n 1
 
 unit-report:
 	mkdir -p "coverage" \
