@@ -41,6 +41,18 @@ var (
 
 // ApplyEntry applies one entry without mutating the supplied state.
 func (a Account) ApplyEntry(state LedgerState, direction transaction.Direction, amount money.Money) (LedgerState, error) {
+	return a.applyEntry(state, direction, amount, true)
+}
+
+// ApplyHistoricalEntry recalculates a historical entry without rejecting an
+// already persisted balance that violates the current financial policy.
+// The account configuration is still validated, so a missing or invalid
+// policy cannot be silently treated as unrestricted during a backfill.
+func (a Account) ApplyHistoricalEntry(state LedgerState, direction transaction.Direction, amount money.Money) (LedgerState, error) {
+	return a.applyEntry(state, direction, amount, false)
+}
+
+func (a Account) applyEntry(state LedgerState, direction transaction.Direction, amount money.Money, enforcePolicy bool) (LedgerState, error) {
 	if !a.BalancePolicy.IsValid() {
 		return state, fault.ErrInvalidBalancePolicy
 	}
@@ -74,7 +86,7 @@ func (a Account) ApplyEntry(state LedgerState, direction transaction.Direction, 
 	if err != nil {
 		return state, err
 	}
-	if a.BalancePolicy == BalanceNonNegative && newBalance < 0 {
+	if enforcePolicy && a.BalancePolicy == BalanceNonNegative && newBalance < 0 {
 		return state, fault.ErrInsufficientBalance
 	}
 	if state.SequenceNumber == math.MaxInt64 {

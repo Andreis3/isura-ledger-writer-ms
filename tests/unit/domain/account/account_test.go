@@ -123,6 +123,18 @@ var _ = Describe("INTERNAL :: DOMAIN :: ACCOUNT :: ACCOUNT", func() {
 			Expect(state.RunningBalance).To(Equal(int64(-1)))
 		})
 
+		It("recalculates historical restrictive entries without retroactive rejection", func() {
+			amount, err := money.NewMoney(101, money.BRL)
+			Expect(err).NotTo(HaveOccurred())
+			acc := account.Account{AccountType: account.Asset, Currency: money.BRL, BalancePolicy: account.BalanceNonNegative}
+
+			state, applyErr := acc.ApplyHistoricalEntry(account.LedgerState{RunningBalance: 100}, transaction.Credit, amount)
+
+			Expect(applyErr).NotTo(HaveOccurred())
+			Expect(state.SequenceNumber).To(Equal(int64(1)))
+			Expect(state.RunningBalance).To(Equal(int64(-1)))
+		})
+
 		It("rejects invalid policy, direction, amount and currency without mutating state", func() {
 			validAmount, err := money.NewMoney(100, money.BRL)
 			Expect(err).NotTo(HaveOccurred())

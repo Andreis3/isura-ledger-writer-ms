@@ -137,6 +137,63 @@ var _ = ginkgo.Describe("transaction repository", ginkgo.Ordered, func() {
 		gomega.Expect(found.BalancePolicy).To(gomega.Equal(account.BalanceNonNegative))
 	})
 
+	ginkgo.It("recalculates historical balances using the account nature and preserves sequences", func() {
+		accountID := newIDV7()
+		transactionID := newIDV7()
+		now := time.Now()
+		_, err := tx.Exec(ctx, `
+			INSERT INTO accounts (id, account_external_id, account_number, tax_id, status, type, balance_policy, currency, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, 'ACTIVE', 'ASSET', 'BALANCE_NON_NEGATIVE', 'BRL', $5, $5)`,
+			accountID, uuid.NewString(), fmt.Sprintf("%d", now.UnixNano()), "52998224725", now)
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		_, err = tx.Exec(ctx, `
+			INSERT INTO transactions (id, idempotency_key, request_fingerprint, status, operation, amount, currency, created_at, updated_at)
+			VALUES ($1, $2, $3, 'PENDING', 'TRANSFER', 100, 'BRL', $4, $4)`,
+			transactionID, uuid.NewString(), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", now)
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		for _, entry := range []struct {
+			id, direction                    string
+			sequence, amount, runningBalance int64
+		}{
+			{id: newIDV7(), direction: "DEBIT", sequence: 1, amount: 100, runningBalance: -100},
+			{id: newIDV7(), direction: "CREDIT", sequence: 2, amount: 40, runningBalance: -60},
+		} {
+			_, err = tx.Exec(ctx, `
+				INSERT INTO entries (id, account_id, transaction_id, sequence_number, direction, amount, running_balance, currency, created_at)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, 'BRL', $8)`,
+				entry.id, accountID, transactionID, entry.sequence, entry.direction, entry.amount, entry.runningBalance, now)
+			gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		}
+
+		report, err := repository.NewHistoricalBalanceBackfill(pool).Run(database.WithTx(ctx, tx))
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		gomega.Expect(report.Accounts).To(gomega.Equal(1))
+		gomega.Expect(report.Entries).To(gomega.Equal(2))
+		gomega.Expect(report.UpdatedEntries).To(gomega.Equal(2))
+		gomega.Expect(report.PersistedBalanceMismatches).To(gomega.Equal(2))
+		gomega.Expect(report.SequenceMismatches).To(gomega.Equal(0))
+		gomega.Expect(report.PolicyViolations).To(gomega.BeEmpty())
+		gomega.Expect(report.ReadyForActivation).To(gomega.BeTrue())
+
+		repeatedReport, err := repository.NewHistoricalBalanceBackfill(pool).Run(database.WithTx(ctx, tx))
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		gomega.Expect(repeatedReport.PersistedBalanceMismatches).To(gomega.Equal(0))
+		gomega.Expect(repeatedReport.UpdatedEntries).To(gomega.Equal(0))
+		gomega.Expect(repeatedReport.ReadyForActivation).To(gomega.BeTrue())
+
+		rows, err := tx.Query(ctx, `SELECT sequence_number, running_balance FROM entries WHERE account_id = $1 ORDER BY sequence_number`, accountID)
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		defer rows.Close()
+		var balances []int64
+		for rows.Next() {
+			var sequence, balance int64
+			gomega.Expect(rows.Scan(&sequence, &balance)).To(gomega.Succeed())
+			balances = append(balances, balance)
+		}
+		gomega.Expect(rows.Err()).NotTo(gomega.HaveOccurred())
+		gomega.Expect(balances).To(gomega.Equal([]int64{100, 60}))
+	})
+
 	ginkgo.It("commits or rolls back transaction, entries and outbox as one unit", func() {
 		accountA := insertAccount(ctx, pool)
 		accountB := insertAccount(ctx, pool)
