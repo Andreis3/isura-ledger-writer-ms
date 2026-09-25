@@ -22,8 +22,20 @@ var _ = Describe("transport contracts", func() {
 	It("maps stable financial fault codes to REST and gRPC statuses", func() {
 		Expect(resttranslator.HTTPStatus(fault.CodeDuplicateTransaction)).To(Equal(http.StatusConflict))
 		Expect(resttranslator.HTTPStatus(fault.CodeInsufficientBalance)).To(Equal(http.StatusUnprocessableEntity))
+		Expect(grpctranslator.GRPCStatus(fault.ErrInsufficientBalance)).To(Equal(codes.FailedPrecondition))
 		Expect(grpctranslator.GRPCStatus(fault.IdempotencyConflictError(errors.New("mismatch")))).To(Equal(codes.AlreadyExists))
 		Expect(grpctranslator.GRPCStatus(fault.TransactionConflictError(errors.New("serialization")))).To(Equal(codes.Unavailable))
+	})
+
+	It("returns a safe non-retryable insufficient balance response", func() {
+		response := httptest.NewRecorder()
+		decoder.ResponseError(response, fault.ErrInsufficientBalance)
+
+		Expect(response.Code).To(Equal(http.StatusUnprocessableEntity))
+		Expect(response.Body.String()).To(ContainSubstring(`"code":"ILMS-1004"`))
+		Expect(response.Body.String()).To(ContainSubstring(`"message":"insufficient balance"`))
+		Expect(response.Body.String()).To(ContainSubstring(`"retryable":false`))
+		Expect(response.Body.String()).ToNot(ContainSubstring("account_id"))
 	})
 
 	It("does not expose technical causes in REST errors", func() {

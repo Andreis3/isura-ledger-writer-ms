@@ -268,11 +268,18 @@ func (c *CreateTransaction) saveCreatedEvent(ctx context.Context, entityTransact
 
 func (c *CreateTransaction) fail(span application.Span, err error, reason string) (*dto.CreateTransactionOutput, error) {
 	span.RecordError(err)
-	c.metrics.RecordCommandTotal(createTransactionCommand, "failure")
+	c.metrics.RecordCommandTotal(createTransactionCommand, commandFailureState(err))
 	c.log.ErrorJSON("CreateTransaction "+reason, append([]any{
 		slog.String("trace_id", span.SpanContext().TraceID()),
 	}, fault.Attrs(err)...)...)
 	return nil, err
+}
+
+func commandFailureState(err error) string {
+	if errors.Is(err, fault.ErrInsufficientBalance) {
+		return "insufficient_balance"
+	}
+	return "failure"
 }
 
 func commandState(output *dto.CreateTransactionOutput) string {
