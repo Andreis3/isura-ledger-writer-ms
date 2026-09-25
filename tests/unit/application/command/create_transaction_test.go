@@ -19,6 +19,7 @@ import (
 	"github.com/andreis3/isura-ledger-ms/internal/domain/outbox"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/transaction"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/postgres/repository/criteria"
+	"github.com/jackc/pgx/v5/pgconn"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -45,6 +46,7 @@ var _ = Describe("CreateTransaction", func() {
 		Expect(transactions.saved.Status).To(Equal(transaction.Completed))
 		Expect(transactions.saved.Entries).To(HaveLen(2))
 		Expect(outboxes.saved).NotTo(BeNil())
+		Expect(accounts.findCalls).To(Equal([]string{creditExternalID, debitExternalID}))
 
 		var event transaction.TransactionCreated
 		Expect(json.Unmarshal(outboxes.saved.Payload, &event)).To(Succeed())
@@ -112,6 +114,61 @@ var _ = Describe("CreateTransaction", func() {
 		Expect(result).To(BeNil())
 		Expect(err).To(MatchError("outbox unavailable"))
 	})
+
+	It("retries the complete operation after a sequence conflict", func() {
+		transactions := &transactionRepository{saveErrors: []error{
+			&pgconn.PgError{Code: "23505", ConstraintName: "unique_entry_sequence_number"},
+		}}
+		uow := &retryingUnitOfWork{}
+		accounts := newAccountRepository()
+		sut := newCommand(accounts, transactions, &outboxRepository{}, uow)
+
+		result, err := sut.Execute(context.Background(), validInput())
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.IdempotentReplay).To(BeFalse())
+		Expect(transactions.saveCalls).To(Equal(2))
+		Expect(accounts.findCalls).To(Equal([]string{
+			creditExternalID, debitExternalID,
+			creditExternalID, debitExternalID,
+		}))
+	})
+
+	It("replays after a concurrent request wins the idempotency race", func() {
+		input := validInput()
+		persisted, err := input.CreateTransactionFacade()
+		Expect(err).NotTo(HaveOccurred())
+		Expect(persisted.Complete()).To(Succeed())
+		transactions := &transactionRepository{
+			saveErrors:     []error{&pgconn.PgError{Code: "23505", ConstraintName: "idx_transactions_idempotency_key"}},
+			existingOnSave: persisted,
+		}
+		sut := newCommand(newAccountRepository(), transactions, &outboxRepository{}, &unitOfWork{})
+
+		result, err := sut.Execute(context.Background(), input)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.TransactionID).To(Equal(new(persisted.ID.String())))
+		Expect(result.IdempotentReplay).To(BeTrue())
+	})
+
+	It("rejects a concurrent idempotency race with a different fingerprint", func() {
+		input := validInput()
+		persisted, err := input.CreateTransactionFacade()
+		Expect(err).NotTo(HaveOccurred())
+		persisted.Fingerprint = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		transactions := &transactionRepository{
+			saveErrors:     []error{&pgconn.PgError{Code: "23505", ConstraintName: "idx_transactions_idempotency_key"}},
+			existingOnSave: persisted,
+		}
+		sut := newCommand(newAccountRepository(), transactions, &outboxRepository{}, &unitOfWork{})
+
+		result, err := sut.Execute(context.Background(), input)
+
+		Expect(result).To(BeNil())
+		Expect(err).To(MatchError(ContainSubstring("idempotency fingerprint mismatch")))
+		Expect(transactions.saved).To(BeNil())
+	})
 })
 
 func validInput() dto.CreateTransactionInput {
@@ -142,8 +199,22 @@ func (u *unitOfWork) WithRetryableTransaction(ctx context.Context, fn func(conte
 	return fn(ctx)
 }
 
+type retryingUnitOfWork struct{}
+
+func (u *retryingUnitOfWork) WithTransaction(ctx context.Context, fn func(context.Context) error) error {
+	return fn(ctx)
+}
+
+func (u *retryingUnitOfWork) WithRetryableTransaction(ctx context.Context, fn func(context.Context) error) error {
+	if err := fn(ctx); err != nil {
+		return fn(ctx)
+	}
+	return nil
+}
+
 type accountRepository struct {
-	accounts map[string]*account.Account
+	accounts  map[string]*account.Account
+	findCalls []string
 }
 
 func newAccountRepository() *accountRepository {
@@ -161,15 +232,28 @@ func (r *accountRepository) FindAccount(_ context.Context, params criteria.Accou
 	if params.AccountExternalID == nil {
 		return nil, nil
 	}
+	r.findCalls = append(r.findCalls, *params.AccountExternalID)
 	return r.accounts[*params.AccountExternalID], nil
 }
 
 type transactionRepository struct {
-	existing *transaction.Transaction
-	saved    *transaction.Transaction
+	existing       *transaction.Transaction
+	existingOnSave *transaction.Transaction
+	saved          *transaction.Transaction
+	saveErrors     []error
+	saveCalls      int
 }
 
 func (r *transactionRepository) Save(_ context.Context, value *transaction.Transaction) error {
+	r.saveCalls++
+	if len(r.saveErrors) > 0 {
+		err := r.saveErrors[0]
+		r.saveErrors = r.saveErrors[1:]
+		if r.existingOnSave != nil {
+			r.existing = r.existingOnSave
+		}
+		return err
+	}
 	r.saved = value
 	return nil
 }

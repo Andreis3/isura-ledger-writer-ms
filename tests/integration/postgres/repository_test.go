@@ -112,6 +112,40 @@ var _ = ginkgo.Describe("transaction repository", ginkgo.Ordered, func() {
 		gomega.Expect(outboxes).To(gomega.Equal(1))
 	})
 
+	ginkgo.It("commits or rolls back transaction, entries and outbox as one unit", func() {
+		accountA := insertAccount(ctx, pool)
+		accountB := insertAccount(ctx, pool)
+		transactionRepo := repository.NewTransactionRepository(pool)
+		outboxRepo := repository.NewOutBoxRepository(pool)
+		unitOfWork := uow.NewUnitOfWork(pool)
+
+		committed := newTransaction(accountA, accountB)
+		err := unitOfWork.WithTransaction(ctx, func(txCtx context.Context) error {
+			if err := transactionRepo.Save(txCtx, committed); err != nil {
+				return err
+			}
+			return outboxRepo.Save(txCtx, newOutbox(committed.ID.String()))
+		})
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+
+		assertLedgerRecords(ctx, pool, committed.ID.String(), 1, 2, 1)
+
+		rolledBack := newTransaction(accountA, accountB)
+		expectedFailure := errors.New("force atomic rollback")
+		err = unitOfWork.WithTransaction(ctx, func(txCtx context.Context) error {
+			if err := transactionRepo.Save(txCtx, rolledBack); err != nil {
+				return err
+			}
+			if err := outboxRepo.Save(txCtx, newOutbox(rolledBack.ID.String())); err != nil {
+				return err
+			}
+			return expectedFailure
+		})
+		gomega.Expect(err).To(gomega.MatchError(expectedFailure))
+
+		assertLedgerRecords(ctx, pool, rolledBack.ID.String(), 0, 0, 0)
+	})
+
 	ginkgo.It("returns the same transaction and entries for an idempotency replay", func() {
 		accountA, accountB := insertAccounts(ctx, tx)
 		original := newTransaction(accountA, accountB)
@@ -210,6 +244,28 @@ var _ = ginkgo.Describe("transaction repository", ginkgo.Ordered, func() {
 		_ = accountB
 	})
 
+	ginkgo.It("applies the unique sequence index per account", func() {
+		accountA, accountB := insertAccounts(ctx, tx)
+		entityTransaction := newTransaction(accountA, accountB)
+		txContext := database.WithTx(ctx, tx)
+		gomega.Expect(repository.NewTransactionRepository(pool).Save(txContext, entityTransaction)).To(gomega.Succeed())
+
+		var indexDefinition string
+		gomega.Expect(tx.QueryRow(ctx, `SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND tablename = 'entries' AND indexname = 'unique_entry_sequence_number'`).Scan(&indexDefinition)).To(gomega.Succeed())
+		gomega.Expect(indexDefinition).To(gomega.ContainSubstring("UNIQUE"))
+		gomega.Expect(indexDefinition).To(gomega.ContainSubstring("account_id, sequence_number"))
+
+		_, err := tx.Exec(ctx, `
+			INSERT INTO entries (
+				id, account_id, transaction_id, sequence_number, direction, amount,
+				running_balance, currency, created_at
+			) VALUES ($1, $2, $3, 1, 'DEBIT', 1500, -1500, 'BRL', $4)
+		`, uuid.NewString(), accountA, entityTransaction.ID.String(), time.Now())
+		var pgErr *pgconn.PgError
+		gomega.Expect(errors.As(err, &pgErr)).To(gomega.BeTrue())
+		gomega.Expect(pgErr.ConstraintName).To(gomega.Equal("unique_entry_sequence_number"))
+	})
+
 	ginkgo.It("reconstructs a transfer from its append-only entries", func() {
 		accountA, accountB := insertAccounts(ctx, tx)
 		entityTransaction := newTransaction(accountA, accountB)
@@ -233,6 +289,23 @@ var _ = ginkgo.Describe("transaction repository", ginkgo.Ordered, func() {
 		_, hasDelete := typeOfRepository.MethodByName("Delete")
 		gomega.Expect(hasUpdate).To(gomega.BeFalse())
 		gomega.Expect(hasDelete).To(gomega.BeFalse())
+	})
+
+	ginkgo.It("reads accounts without acquiring a pessimistic lock", func() {
+		externalID, _ := insertAccountsForCommand(ctx, pool)
+		blocker, err := pool.Begin(ctx)
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		defer blocker.Rollback(ctx)
+		_, err = blocker.Exec(ctx, "SELECT id FROM accounts WHERE account_external_id = $1 FOR UPDATE", externalID)
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+
+		readCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		defer cancel()
+		found, err := repository.NewAccountRepository(pool).FindAccount(readCtx, criteria.AccountCriteria{
+			AccountExternalID: &externalID,
+		})
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		gomega.Expect(found).NotTo(gomega.BeNil())
 	})
 
 	ginkgo.It("assigns unique monotonic sequences for concurrent transfers sharing an account", func() {
@@ -269,9 +342,17 @@ var _ = ginkgo.Describe("transaction repository", ginkgo.Ordered, func() {
 		}
 		wg.Wait()
 		close(errs)
+		successes := 0
 		for err := range errs {
-			gomega.Expect(err).NotTo(gomega.HaveOccurred())
+			if err == nil {
+				successes++
+				continue
+			}
+			var pgErr *pgconn.PgError
+			gomega.Expect(errors.As(err, &pgErr)).To(gomega.BeTrue())
+			gomega.Expect(pgErr.ConstraintName).To(gomega.Equal("unique_entry_sequence_number"))
 		}
+		gomega.Expect(successes).To(gomega.BeNumerically(">=", 1))
 
 		rows, err := pool.Query(ctx, `SELECT sequence_number FROM entries WHERE account_id = $1 ORDER BY sequence_number`, sharedAccount)
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
@@ -283,7 +364,11 @@ var _ = ginkgo.Describe("transaction repository", ginkgo.Ordered, func() {
 			sequences = append(sequences, sequence)
 		}
 		gomega.Expect(rows.Err()).NotTo(gomega.HaveOccurred())
-		gomega.Expect(sequences).To(gomega.Equal([]int64{1, 2}))
+		gomega.Expect(sequences).NotTo(gomega.BeEmpty())
+		gomega.Expect(sequences[0]).To(gomega.Equal(int64(1)))
+		if len(sequences) == 2 {
+			gomega.Expect(sequences[1]).To(gomega.Equal(int64(2)))
+		}
 	})
 
 	ginkgo.It("returns ILMS-2004 after exhausting serialization retries", func() {
@@ -401,6 +486,16 @@ func newOutbox(transactionID string) *outbox.Outbox {
 
 func criteriaForKey(key string) criteria.TransactionCriteria {
 	return criteria.TransactionCriteria{IdempotencyKey: &key, WithEntries: true}
+}
+
+func assertLedgerRecords(ctx context.Context, pool *pgxpool.Pool, transactionID string, transactions, entries, outboxes int) {
+	var transactionCount, entryCount, outboxCount int
+	gomega.Expect(pool.QueryRow(ctx, "SELECT count(*) FROM transactions WHERE id = $1", transactionID).Scan(&transactionCount)).To(gomega.Succeed())
+	gomega.Expect(pool.QueryRow(ctx, "SELECT count(*) FROM entries WHERE transaction_id = $1", transactionID).Scan(&entryCount)).To(gomega.Succeed())
+	gomega.Expect(pool.QueryRow(ctx, "SELECT count(*) FROM outbox_events WHERE aggregate_id = $1", transactionID).Scan(&outboxCount)).To(gomega.Succeed())
+	gomega.Expect(transactionCount).To(gomega.Equal(transactions))
+	gomega.Expect(entryCount).To(gomega.Equal(entries))
+	gomega.Expect(outboxCount).To(gomega.Equal(outboxes))
 }
 
 type nopTx struct{ pgx.Tx }

@@ -22,8 +22,6 @@ func NewTransactionRepository(db database.Querier) *TransactionRepository {
 }
 
 // Save persists the transaction and its entries using the transaction carried by ctx.
-// Account rows are locked before sequences are calculated, so concurrent writers for an
-// account cannot derive the same next sequence.
 func (r *TransactionRepository) Save(ctx context.Context, data *transaction.Transaction) error {
 	if err := r.assignSequences(ctx, data.Entries); err != nil {
 		return err
@@ -87,48 +85,55 @@ func (r *TransactionRepository) Save(ctx context.Context, data *transaction.Tran
 }
 
 func (r *TransactionRepository) assignSequences(ctx context.Context, entries []*transaction.Entry) error {
-	type accountLedgerState struct {
-		nextSequence   int64
-		runningBalance int64
-	}
-
 	ordered := append([]*transaction.Entry(nil), entries...)
 	sort.SliceStable(ordered, func(i, j int) bool {
 		return ordered[i].AccountID < ordered[j].AccountID
 	})
 
 	db := resolveDB(ctx, r.db)
-	stateByAccount := make(map[string]accountLedgerState, len(ordered))
+	stateByAccount := make(map[string]EntryLedgerState, len(ordered))
 	for _, entry := range ordered {
-		if state, ok := stateByAccount[entry.AccountID]; ok {
-			state.nextSequence++
-			state.runningBalance = applyEntryToBalance(state.runningBalance, entry)
-			stateByAccount[entry.AccountID] = state
-			entry.SetSequenceNumber(state.nextSequence)
-			entry.SetRunningBalance(state.runningBalance)
-			continue
+		state, ok := stateByAccount[entry.AccountID]
+		if !ok {
+			var err error
+			state, err = r.readEntryLedgerState(ctx, db, entry.AccountID)
+			if err != nil {
+				return err
+			}
 		}
 
-		var accountID string
-		if err := db.QueryRow(ctx, `SELECT id FROM accounts WHERE id = $1 FOR UPDATE`, entry.AccountID).Scan(&accountID); err != nil {
-			return err
-		}
-		var lastSequence, lastBalance int64
-		if err := db.QueryRow(ctx, `
-			SELECT sequence_number, running_balance
-			FROM entries
-			WHERE account_id = $1
-			ORDER BY sequence_number DESC
-			LIMIT 1`, entry.AccountID).Scan(&lastSequence, &lastBalance); err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return err
-		}
-		next := lastSequence + 1
-		balance := applyEntryToBalance(lastBalance, entry)
-		stateByAccount[entry.AccountID] = accountLedgerState{nextSequence: next, runningBalance: balance}
-		entry.SetSequenceNumber(next)
-		entry.SetRunningBalance(balance)
+		state.SequenceNumber++
+		state.RunningBalance = applyEntryToBalance(state.RunningBalance, entry)
+		stateByAccount[entry.AccountID] = state
+		entry.SetSequenceNumber(state.SequenceNumber)
+		entry.SetRunningBalance(state.RunningBalance)
 	}
 	return nil
+}
+
+// EntryLedgerState contains the last persisted state used to calculate a new entry.
+// An account without entries starts at sequence zero and balance zero.
+type EntryLedgerState struct {
+	AccountID      string
+	SequenceNumber int64
+	RunningBalance int64
+}
+
+func (r *TransactionRepository) readEntryLedgerState(ctx context.Context, db database.Querier, accountID string) (EntryLedgerState, error) {
+	state := EntryLedgerState{AccountID: accountID}
+	err := db.QueryRow(ctx, `
+		SELECT sequence_number, running_balance
+		FROM entries
+		WHERE account_id = $1
+		ORDER BY sequence_number DESC
+		LIMIT 1`, accountID).Scan(&state.SequenceNumber, &state.RunningBalance)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return state, nil
+	}
+	if err != nil {
+		return EntryLedgerState{}, err
+	}
+	return state, nil
 }
 
 func applyEntryToBalance(balance int64, entry *transaction.Entry) int64 {
