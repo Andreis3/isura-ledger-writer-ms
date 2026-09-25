@@ -319,6 +319,87 @@ var _ = ginkgo.Describe("transaction repository", ginkgo.Ordered, func() {
 		gomega.Expect(count).To(gomega.Equal(1))
 	})
 
+	ginkgo.It("approves only one of two concurrent debits that consume the available balance", func() {
+		debitExternalID, creditExternalID := insertFundedAccountsForCommand(ctx, pool, 100)
+		createTransaction := newIntegrationCreateTransaction(pool)
+
+		start := make(chan struct{})
+		results := make(chan commandResult, 2)
+		var wg sync.WaitGroup
+		for index := range 2 {
+			key := fmt.Sprintf("cd-%d-%s", index, uuid.NewString())
+			wg.Add(1)
+			go func(key string) {
+				defer wg.Done()
+				<-start
+				results <- executeIntegrationTransaction(ctx, createTransaction, debitExternalID, creditExternalID, key, 100)
+			}(key)
+		}
+		close(start)
+		wg.Wait()
+		close(results)
+
+		successes := 0
+		insufficientBalance := 0
+		for result := range results {
+			if result.err == nil {
+				successes++
+				continue
+			}
+			gomega.Expect(errors.Is(result.err, fault.ErrInsufficientBalance)).To(gomega.BeTrue(), "unexpected concurrent result: %v", result.err)
+			insufficientBalance++
+		}
+		gomega.Expect(successes).To(gomega.Equal(1))
+		gomega.Expect(insufficientBalance).To(gomega.Equal(1))
+
+		var sourceEntries, sourceSequence, sourceBalance int64
+		gomega.Expect(pool.QueryRow(ctx, `
+			SELECT count(*), max(sequence_number)
+			FROM entries e JOIN accounts a ON a.id = e.account_id
+			WHERE a.account_external_id = $1`, debitExternalID).
+			Scan(&sourceEntries, &sourceSequence)).To(gomega.Succeed())
+		gomega.Expect(pool.QueryRow(ctx, `
+			SELECT e.running_balance
+			FROM entries e JOIN accounts a ON a.id = e.account_id
+			WHERE a.account_external_id = $1
+			ORDER BY e.sequence_number DESC
+			LIMIT 1`, debitExternalID).Scan(&sourceBalance)).To(gomega.Succeed())
+		gomega.Expect(sourceEntries).To(gomega.Equal(int64(2)))
+		gomega.Expect(sourceSequence).To(gomega.Equal(int64(2)))
+		gomega.Expect(sourceBalance).To(gomega.Equal(int64(0)))
+
+		var createdTransactions int
+		gomega.Expect(pool.QueryRow(ctx, `
+			SELECT count(*) FROM transactions
+			WHERE idempotency_key LIKE 'cd-%'`).Scan(&createdTransactions)).To(gomega.Succeed())
+		gomega.Expect(createdTransactions).To(gomega.Equal(1))
+	})
+
+	ginkgo.It("replays a successful transaction without creating another entry", func() {
+		debitExternalID, creditExternalID := insertFundedAccountsForCommand(ctx, pool, 100)
+		createTransaction := newIntegrationCreateTransaction(pool)
+		key := "replay-" + uuid.NewString()
+
+		first := executeIntegrationTransaction(ctx, createTransaction, debitExternalID, creditExternalID, key, 100)
+		gomega.Expect(first.err).NotTo(gomega.HaveOccurred())
+		gomega.Expect(first.output).NotTo(gomega.BeNil())
+		gomega.Expect(first.output.IdempotentReplay).To(gomega.BeFalse())
+
+		second := executeIntegrationTransaction(ctx, createTransaction, debitExternalID, creditExternalID, key, 100)
+		gomega.Expect(second.err).NotTo(gomega.HaveOccurred())
+		gomega.Expect(second.output).NotTo(gomega.BeNil())
+		gomega.Expect(second.output.IdempotentReplay).To(gomega.BeTrue())
+		gomega.Expect(second.output.TransactionID).To(gomega.Equal(first.output.TransactionID))
+
+		var transactions, entries, outboxes int
+		gomega.Expect(pool.QueryRow(ctx, `SELECT count(*) FROM transactions WHERE idempotency_key = $1`, key).Scan(&transactions)).To(gomega.Succeed())
+		gomega.Expect(pool.QueryRow(ctx, `SELECT count(*) FROM entries WHERE transaction_id = $1`, *first.output.TransactionID).Scan(&entries)).To(gomega.Succeed())
+		gomega.Expect(pool.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE aggregate_id = $1`, *first.output.TransactionID).Scan(&outboxes)).To(gomega.Succeed())
+		gomega.Expect(transactions).To(gomega.Equal(1))
+		gomega.Expect(entries).To(gomega.Equal(2))
+		gomega.Expect(outboxes).To(gomega.Equal(1))
+	})
+
 	ginkgo.It("rolls back transaction, entries and outbox together", func() {
 		accountA, accountB := insertAccounts(ctx, tx)
 		entityTransaction := newTransaction(accountA, accountB)
@@ -511,6 +592,77 @@ func insertAccountsForCommand(ctx context.Context, pool *pgxpool.Pool) (string, 
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 	}
 	return ids[0], ids[1]
+}
+
+func insertFundedAccountsForCommand(ctx context.Context, pool *pgxpool.Pool, balance int64) (string, string) {
+	debitExternalID := uuid.NewString()
+	creditExternalID := uuid.NewString()
+	debitID := newIDV7()
+	creditID := newIDV7()
+	now := time.Now()
+	for index, data := range []struct {
+		id, externalID, accountType, policy string
+	}{
+		{id: debitID, externalID: debitExternalID, accountType: "LIABILITY", policy: "BALANCE_NON_NEGATIVE"},
+		{id: creditID, externalID: creditExternalID, accountType: "ASSET", policy: "BALANCE_UNRESTRICTED"},
+	} {
+		_, err := pool.Exec(ctx, `
+			INSERT INTO accounts (id, account_external_id, account_number, tax_id, status, type, balance_policy, currency, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, 'ACTIVE', $5, $6, 'BRL', $7, $7)`,
+			data.id, data.externalID, fmt.Sprintf("%d", now.UnixNano()+int64(index)), "52998224725", data.accountType, data.policy, now)
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+	}
+
+	seedTransactionID := newIDV7()
+	_, err := pool.Exec(ctx, `
+		INSERT INTO transactions (id, idempotency_key, request_fingerprint, status, operation, amount, currency, created_at, updated_at)
+		VALUES ($1, $2, $3, 'COMPLETED', 'TRANSFER', $4, 'BRL', $5, $5)`,
+		seedTransactionID, "seed-"+uuid.NewString(), "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", balance, now)
+	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+	for _, entry := range []struct {
+		accountID, direction string
+		balance              int64
+	}{
+		{accountID: debitID, direction: "CREDIT", balance: balance},
+		{accountID: creditID, direction: "DEBIT", balance: -balance},
+	} {
+		_, err = pool.Exec(ctx, `
+			INSERT INTO entries (id, account_id, transaction_id, sequence_number, direction, amount, running_balance, currency, created_at)
+			VALUES ($1, $2, $3, 1, $4, $5, $6, 'BRL', $7)`,
+			newIDV7(), entry.accountID, seedTransactionID, entry.direction, balance, entry.balance, now)
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+	}
+	return debitExternalID, creditExternalID
+}
+
+type commandResult struct {
+	output *dto.CreateTransactionOutput
+	err    error
+}
+
+func newIntegrationCreateTransaction(pool *pgxpool.Pool) *command.CreateTransaction {
+	return command.NewCreateTransaction(
+		uow.NewUnitOfWork(pool),
+		repository.NewAccountRepository(pool),
+		repository.NewTransactionRepository(pool),
+		repository.NewOutBoxRepository(pool),
+		integrationTracer{}, integrationLogger{}, integrationMetrics{},
+	)
+}
+
+func executeIntegrationTransaction(ctx context.Context, createTransaction *command.CreateTransaction, debitExternalID, creditExternalID, key string, amountValue int64) commandResult {
+	currency := string(money.BRL)
+	operation := string(transaction.OperationTransfer)
+	amount := amountValue
+	output, err := createTransaction.Execute(ctx, dto.CreateTransactionInput{
+		IdempotencyKey:  &key,
+		DebitAccountID:  &debitExternalID,
+		CreditAccountID: &creditExternalID,
+		Amount:          &amount,
+		Currency:        &currency,
+		Operation:       &operation,
+	})
+	return commandResult{output: output, err: err}
 }
 
 type integrationTracer struct{}
