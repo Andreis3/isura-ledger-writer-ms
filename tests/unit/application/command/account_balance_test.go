@@ -90,12 +90,13 @@ func validAccountInput() dto.CreateAccountInput {
 		AccountNumber:     "123456",
 		TaxID:             "529.982.247-25",
 		AccountType:       "ASSET",
+		BalancePolicy:     "BALANCE_NON_NEGATIVE",
 		Currency:          "BRL",
 	}
 }
 
 func validAccount() *account.Account {
-	result, err := account.NewAccountBuilder().WithID().WithAccountExternalID(uuid.NewString()).WithAccountNumber("123456").WithTaxID("529.982.247-25").WithStatus().WithType("ASSET").WithCurrency("BRL").Build()
+	result, err := account.NewAccountBuilder().WithID().WithAccountExternalID(uuid.NewString()).WithAccountNumber("123456").WithTaxID("529.982.247-25").WithStatus().WithType("ASSET").WithBalancePolicy("BALANCE_NON_NEGATIVE").WithCurrency("BRL").Build()
 	if err != nil {
 		panic(err)
 	}

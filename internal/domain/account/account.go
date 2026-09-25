@@ -205,6 +205,7 @@ func (b *AccountBuilder) WithUpdatedAt(updatedAt ...time.Time) *AccountBuilder {
 
 // Build builds and validates the Account.
 func (b *AccountBuilder) Build() (*Account, error) {
+	b.eval.CheckField(b.balancePolicy.IsValid(), "balance_policy", "invalid balance policy")
 	if len(b.eval) > 0 {
 		return nil, fault.InvalidEntityError(errors.New("invalid account entity"), b.eval)
 	}

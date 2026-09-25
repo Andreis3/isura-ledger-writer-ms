@@ -32,10 +32,11 @@ func (r *AccountRepository) Save(ctx context.Context, account *account.Account) 
               tax_id,
               status,
               type,
+              balance_policy,
               currency,
               created_at,
               updated_at)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
 
 	accountModel := model.ToAccountModel(account)
 
@@ -46,6 +47,7 @@ func (r *AccountRepository) Save(ctx context.Context, account *account.Account) 
 		accountModel.TaxID,
 		accountModel.Status,
 		accountModel.Type,
+		accountModel.BalancePolicy,
 		accountModel.Currency,
 		accountModel.CreatedAt,
 		accountModel.UpdatedAt,
@@ -72,6 +74,7 @@ func (r *AccountRepository) FindAccount(ctx context.Context, params criteria.Acc
             tax_id,
             status,
             type,
+            balance_policy,
             currency, 
             created_at, 
             updated_at 
@@ -87,6 +90,7 @@ func (r *AccountRepository) FindAccount(ctx context.Context, params criteria.Acc
 		&accountModel.TaxID,
 		&accountModel.Status,
 		&accountModel.Type,
+		&accountModel.BalancePolicy,
 		&accountModel.Currency,
 		&accountModel.CreatedAt,
 		&accountModel.UpdatedAt,

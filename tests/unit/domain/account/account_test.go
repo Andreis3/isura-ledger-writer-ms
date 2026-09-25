@@ -23,6 +23,7 @@ var _ = Describe("INTERNAL :: DOMAIN :: ACCOUNT :: ACCOUNT", func() {
 					WithID("019ff448-c43d-70d3-83c7-dfa0674469b7").
 					WithAccountExternalID("d589965c-1622-4329-98f9-f13354a2e4dc").
 					WithAccountNumber("123456").
+					WithBalancePolicy(string(account.BalanceNonNegative)).
 					WithCurrency(string(money.BRL)).
 					Build()
 				Expect(err).To(BeNil())
@@ -37,6 +38,7 @@ var _ = Describe("INTERNAL :: DOMAIN :: ACCOUNT :: ACCOUNT", func() {
 					WithTaxID("529.982.247-25").
 					WithStatus(string(account.StatusBlocked)).
 					WithType(string(account.Liability)).
+					WithBalancePolicy(string(account.BalanceNonNegative)).
 					WithCurrency(string(money.BRL)).
 					Build()
 				Expect(err).NotTo(HaveOccurred())
@@ -52,6 +54,7 @@ var _ = Describe("INTERNAL :: DOMAIN :: ACCOUNT :: ACCOUNT", func() {
 					WithID("d589965c-1622-4329-98f9-f13354a2e4dc").
 					WithAccountExternalID("").
 					WithAccountNumber("123456").
+					WithBalancePolicy(string(account.BalanceNonNegative)).
 					WithCurrency(string(money.BRL)).
 					Build()
 				Expect(err).NotTo(BeNil())

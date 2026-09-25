@@ -31,6 +31,11 @@ table "accounts" {
       null   = false
     }
 
+  column "balance_policy" {
+    type = varchar(32)
+    null = false
+  }
+
   column "currency" {
     type = varchar(5)
     null = false
@@ -67,4 +72,8 @@ table "accounts" {
     index "idx_account_type" {
       columns = [column.type]
     }
+
+  check "accounts_balance_policy_valid" {
+    expr = "balance_policy IN ('BALANCE_NON_NEGATIVE', 'BALANCE_UNRESTRICTED')"
+  }
 }

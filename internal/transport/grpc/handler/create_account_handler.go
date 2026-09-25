@@ -39,6 +39,7 @@ func (h *CreateAccountHandler) Handle(ctx context.Context, req *pb.CreateAccount
 		AccountNumber:     req.GetAccountNumber(),
 		TaxID:             req.GetTaxId(),
 		AccountType:       string(h.AccountTypeTranslate(req)),
+		BalancePolicy:     string(h.BalancePolicyTranslate(req)),
 		Currency:          string(h.CurrencyTranslate(req)),
 	}
 
@@ -50,6 +51,17 @@ func (h *CreateAccountHandler) Handle(ctx context.Context, req *pb.CreateAccount
 	return &pb.CreateAccountResponse{
 		AccountId: *response.AccountID,
 	}, nil
+}
+
+func (h *CreateAccountHandler) BalancePolicyTranslate(req *pb.CreateAccountRequest) account.BalancePolicy {
+	switch req.GetBalancePolicy() {
+	case pb.BalancePolicy_BALANCE_POLICY_NON_NEGATIVE:
+		return account.BalanceNonNegative
+	case pb.BalancePolicy_BALANCE_POLICY_UNRESTRICTED:
+		return account.BalanceUnrestricted
+	default:
+		return ""
+	}
 }
 
 func (h *CreateAccountHandler) AccountTypeTranslate(req *pb.CreateAccountRequest) account.Type {

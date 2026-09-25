@@ -13,6 +13,7 @@ type Account struct {
 	TaxID             pgtype.Text
 	Status            pgtype.Text
 	Type              pgtype.Text
+	BalancePolicy     pgtype.Text
 	Currency          pgtype.Text
 	CreatedAt         pgtype.Timestamptz
 	UpdatedAt         pgtype.Timestamptz
@@ -44,6 +45,10 @@ func ToAccountModel(entity *account.Account) Account {
 			String: string(entity.AccountType),
 			Valid:  true,
 		},
+		BalancePolicy: pgtype.Text{
+			String: string(entity.BalancePolicy),
+			Valid:  true,
+		},
 		Currency: pgtype.Text{
 			String: string(entity.Currency),
 			Valid:  true,
@@ -68,6 +73,7 @@ func ToAccountDomain(model Account) (*account.Account, error) {
 		WithTaxID(model.TaxID.String).
 		WithStatus(model.Status.String).
 		WithType(model.Type.String).
+		WithBalancePolicy(model.BalancePolicy.String).
 		WithCurrency(model.Currency.String).
 		WithCreatedAt(model.CreatedAt.Time).
 		WithUpdatedAt(model.UpdatedAt.Time).

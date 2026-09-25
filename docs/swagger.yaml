@@ -159,6 +159,7 @@ components:
         - account_number
         - tax_id
         - account_type
+        - balance_policy
         - currency
       properties:
         account_external_id:
@@ -179,6 +180,11 @@ components:
           description: Tipo da conta.
           enum: [ASSET, LIABILITY, EQUITY, REVENUE, EXPENSE]
           example: "ASSET"
+        balance_policy:
+          type: string
+          description: Política aplicada ao saldo normal da conta.
+          enum: [BALANCE_NON_NEGATIVE, BALANCE_UNRESTRICTED]
+          example: "BALANCE_NON_NEGATIVE"
         currency:
           type: string
           description: Moeda da conta.

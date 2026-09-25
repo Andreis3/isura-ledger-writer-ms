@@ -133,6 +133,56 @@ func (Currency) EnumDescriptor() ([]byte, []int) {
 	return file_ledger_v1_account_proto_rawDescGZIP(), []int{1}
 }
 
+// Política aplicada ao saldo normal da conta.
+type BalancePolicy int32
+
+const (
+	BalancePolicy_BALANCE_POLICY_UNSPECIFIED  BalancePolicy = 0
+	BalancePolicy_BALANCE_POLICY_NON_NEGATIVE BalancePolicy = 1
+	BalancePolicy_BALANCE_POLICY_UNRESTRICTED BalancePolicy = 2
+)
+
+// Enum value maps for BalancePolicy.
+var (
+	BalancePolicy_name = map[int32]string{
+		0: "BALANCE_POLICY_UNSPECIFIED",
+		1: "BALANCE_POLICY_NON_NEGATIVE",
+		2: "BALANCE_POLICY_UNRESTRICTED",
+	}
+	BalancePolicy_value = map[string]int32{
+		"BALANCE_POLICY_UNSPECIFIED":  0,
+		"BALANCE_POLICY_NON_NEGATIVE": 1,
+		"BALANCE_POLICY_UNRESTRICTED": 2,
+	}
+)
+
+func (x BalancePolicy) Enum() *BalancePolicy {
+	p := new(BalancePolicy)
+	*p = x
+	return p
+}
+
+func (x BalancePolicy) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (BalancePolicy) Descriptor() protoreflect.EnumDescriptor {
+	return file_ledger_v1_account_proto_enumTypes[2].Descriptor()
+}
+
+func (BalancePolicy) Type() protoreflect.EnumType {
+	return &file_ledger_v1_account_proto_enumTypes[2]
+}
+
+func (x BalancePolicy) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use BalancePolicy.Descriptor instead.
+func (BalancePolicy) EnumDescriptor() ([]byte, []int) {
+	return file_ledger_v1_account_proto_rawDescGZIP(), []int{2}
+}
+
 type CreateAccountRequest struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
 	AccountExternalId string                 `protobuf:"bytes,1,opt,name=account_external_id,json=accountExternalId,proto3" json:"account_external_id,omitempty"`
@@ -140,6 +190,7 @@ type CreateAccountRequest struct {
 	TaxId             string                 `protobuf:"bytes,3,opt,name=tax_id,json=taxId,proto3" json:"tax_id,omitempty"`
 	AccountType       AccountType            `protobuf:"varint,4,opt,name=account_type,json=accountType,proto3,enum=ledger.v1.AccountType" json:"account_type,omitempty"` // Enum forte
 	Currency          Currency               `protobuf:"varint,5,opt,name=currency,proto3,enum=ledger.v1.Currency" json:"currency,omitempty"`                             // Enum forte
+	BalancePolicy     BalancePolicy          `protobuf:"varint,6,opt,name=balance_policy,json=balancePolicy,proto3,enum=ledger.v1.BalancePolicy" json:"balance_policy,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -207,6 +258,13 @@ func (x *CreateAccountRequest) GetCurrency() Currency {
 		return x.Currency
 	}
 	return Currency_CURRENCY_UNSPECIFIED
+}
+
+func (x *CreateAccountRequest) GetBalancePolicy() BalancePolicy {
+	if x != nil {
+		return x.BalancePolicy
+	}
+	return BalancePolicy_BALANCE_POLICY_UNSPECIFIED
 }
 
 type CreateAccountResponse struct {
@@ -353,13 +411,14 @@ var File_ledger_v1_account_proto protoreflect.FileDescriptor
 
 const file_ledger_v1_account_proto_rawDesc = "" +
 	"\n" +
-	"\x17ledger/v1/account.proto\x12\tledger.v1\"\xf0\x01\n" +
+	"\x17ledger/v1/account.proto\x12\tledger.v1\"\xb1\x02\n" +
 	"\x14CreateAccountRequest\x12.\n" +
 	"\x13account_external_id\x18\x01 \x01(\tR\x11accountExternalId\x12%\n" +
 	"\x0eaccount_number\x18\x02 \x01(\tR\raccountNumber\x12\x15\n" +
 	"\x06tax_id\x18\x03 \x01(\tR\x05taxId\x129\n" +
 	"\faccount_type\x18\x04 \x01(\x0e2\x16.ledger.v1.AccountTypeR\vaccountType\x12/\n" +
-	"\bcurrency\x18\x05 \x01(\x0e2\x13.ledger.v1.CurrencyR\bcurrency\"6\n" +
+	"\bcurrency\x18\x05 \x01(\x0e2\x13.ledger.v1.CurrencyR\bcurrency\x12?\n" +
+	"\x0ebalance_policy\x18\x06 \x01(\x0e2\x18.ledger.v1.BalancePolicyR\rbalancePolicy\"6\n" +
 	"\x15CreateAccountResponse\x12\x1d\n" +
 	"\n" +
 	"account_id\x18\x01 \x01(\tR\taccountId\"C\n" +
@@ -379,7 +438,11 @@ const file_ledger_v1_account_proto_rawDesc = "" +
 	"\x14CURRENCY_UNSPECIFIED\x10\x00\x12\x10\n" +
 	"\fCURRENCY_BRL\x10\x01\x12\x10\n" +
 	"\fCURRENCY_USD\x10\x02\x12\x10\n" +
-	"\fCURRENCY_EUR\x10\x03BMZKgithub.com/andreis3/isura-ledger-ms/internal/transport/grpc/pb/ledger/v1;pbb\x06proto3"
+	"\fCURRENCY_EUR\x10\x03*q\n" +
+	"\rBalancePolicy\x12\x1e\n" +
+	"\x1aBALANCE_POLICY_UNSPECIFIED\x10\x00\x12\x1f\n" +
+	"\x1bBALANCE_POLICY_NON_NEGATIVE\x10\x01\x12\x1f\n" +
+	"\x1bBALANCE_POLICY_UNRESTRICTED\x10\x02BMZKgithub.com/andreis3/isura-ledger-ms/internal/transport/grpc/pb/ledger/v1;pbb\x06proto3"
 
 var (
 	file_ledger_v1_account_proto_rawDescOnce sync.Once
@@ -393,24 +456,26 @@ func file_ledger_v1_account_proto_rawDescGZIP() []byte {
 	return file_ledger_v1_account_proto_rawDescData
 }
 
-var file_ledger_v1_account_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_ledger_v1_account_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
 var file_ledger_v1_account_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_ledger_v1_account_proto_goTypes = []any{
 	(AccountType)(0),              // 0: ledger.v1.AccountType
 	(Currency)(0),                 // 1: ledger.v1.Currency
-	(*CreateAccountRequest)(nil),  // 2: ledger.v1.CreateAccountRequest
-	(*CreateAccountResponse)(nil), // 3: ledger.v1.CreateAccountResponse
-	(*GetBalanceRequest)(nil),     // 4: ledger.v1.GetBalanceRequest
-	(*GetBalanceResponse)(nil),    // 5: ledger.v1.GetBalanceResponse
+	(BalancePolicy)(0),            // 2: ledger.v1.BalancePolicy
+	(*CreateAccountRequest)(nil),  // 3: ledger.v1.CreateAccountRequest
+	(*CreateAccountResponse)(nil), // 4: ledger.v1.CreateAccountResponse
+	(*GetBalanceRequest)(nil),     // 5: ledger.v1.GetBalanceRequest
+	(*GetBalanceResponse)(nil),    // 6: ledger.v1.GetBalanceResponse
 }
 var file_ledger_v1_account_proto_depIdxs = []int32{
 	0, // 0: ledger.v1.CreateAccountRequest.account_type:type_name -> ledger.v1.AccountType
 	1, // 1: ledger.v1.CreateAccountRequest.currency:type_name -> ledger.v1.Currency
-	2, // [2:2] is the sub-list for method output_type
-	2, // [2:2] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	2, // 2: ledger.v1.CreateAccountRequest.balance_policy:type_name -> ledger.v1.BalancePolicy
+	3, // [3:3] is the sub-list for method output_type
+	3, // [3:3] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_ledger_v1_account_proto_init() }
@@ -423,7 +488,7 @@ func file_ledger_v1_account_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ledger_v1_account_proto_rawDesc), len(file_ledger_v1_account_proto_rawDesc)),
-			NumEnums:      2,
+			NumEnums:      3,
 			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   0,

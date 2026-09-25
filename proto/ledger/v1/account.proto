@@ -24,12 +24,20 @@ enum Currency {
   CURRENCY_EUR = 3;
 }
 
+// Política aplicada ao saldo normal da conta.
+enum BalancePolicy {
+  BALANCE_POLICY_UNSPECIFIED = 0;
+  BALANCE_POLICY_NON_NEGATIVE = 1;
+  BALANCE_POLICY_UNRESTRICTED = 2;
+}
+
 message CreateAccountRequest {
   string account_external_id = 1;
   string account_number = 2;      // Número interno ou agência/conta
   string tax_id = 3;
   AccountType account_type = 4; // Enum forte
   Currency currency = 5;          // Enum forte
+  BalancePolicy balance_policy = 6;
 }
 
 message CreateAccountResponse {
