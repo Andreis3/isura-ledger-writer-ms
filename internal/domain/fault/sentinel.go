@@ -20,6 +20,8 @@ var (
 	ErrAccountNotFound      = &DomainError{Code: CodeNotFound, FriendlyMessage: "account not found"}
 	ErrAccountAlreadyExists = &DomainError{Code: CodeConflict, FriendlyMessage: "account already exists"}
 	ErrInsufficientFunds    = &DomainError{Code: CodeConflict, FriendlyMessage: "insufficient funds"}
+	ErrInsufficientBalance  = &DomainError{Code: CodeInsufficientBalance, FriendlyMessage: "insufficient balance"}
+	ErrInvalidBalancePolicy = &DomainError{Code: CodeInvalidEntity, FriendlyMessage: "invalid balance policy"}
 	ErrTransactionNotFound  = &DomainError{Code: CodeNotFound, FriendlyMessage: "transaction not found"}
 	ErrInvalidAmount        = &DomainError{Code: CodeBadRequest, FriendlyMessage: "invalid amount"}
 	ErrDuplicateTransaction = &DomainError{Code: CodeConflict, FriendlyMessage: "transaction already exists"}

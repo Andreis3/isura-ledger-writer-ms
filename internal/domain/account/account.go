@@ -62,6 +62,7 @@ type AccountBuilder struct {
 	taxID             string
 	status            Status
 	accountType       Type
+	balancePolicy     BalancePolicy
 	currency          money.Currency
 	createdAt         time.Time
 	updatedAt         time.Time
@@ -80,9 +81,18 @@ type Account struct {
 	TaxID             string
 	Status            Status
 	AccountType       Type
+	BalancePolicy     BalancePolicy
 	Currency          money.Currency
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
+}
+
+// WithBalancePolicy sets the balance policy used by the account ledger.
+func (b *AccountBuilder) WithBalancePolicy(policy string) *AccountBuilder {
+	balancePolicy := BalancePolicy(policy)
+	b.eval.CheckField(balancePolicy.IsValid(), "balance_policy", "invalid balance policy")
+	b.balancePolicy = balancePolicy
+	return b
 }
 
 // WithID sets the ID (required).
@@ -208,6 +218,7 @@ func (b *AccountBuilder) Build() (*Account, error) {
 		TaxID:             b.taxID,
 		Status:            b.status,
 		AccountType:       b.accountType,
+		BalancePolicy:     b.balancePolicy,
 		Currency:          b.currency,
 		CreatedAt:         shared.CoalesceTime(b.createdAt, now),
 		UpdatedAt:         shared.CoalesceTime(b.updatedAt, now),
