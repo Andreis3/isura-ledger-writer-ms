@@ -7,6 +7,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/andreis3/isura-ledger-ms/internal/domain/account"
+	"github.com/andreis3/isura-ledger-ms/internal/domain/money"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/transaction"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/postgres/database"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/postgres/model"
@@ -91,36 +93,73 @@ func (r *TransactionRepository) assignSequences(ctx context.Context, entries []*
 	})
 
 	db := resolveDB(ctx, r.db)
-	stateByAccount := make(map[string]EntryLedgerState, len(ordered))
+	stateByAccount := make(map[string]account.LedgerState, len(ordered))
+	accountsByID := make(map[string]account.Account, len(ordered))
+	assignments := make([]entryAssignment, 0, len(ordered))
 	for _, entry := range ordered {
 		state, ok := stateByAccount[entry.AccountID]
 		if !ok {
-			var err error
+			loadedAccount, err := r.readAccountLedgerConfig(ctx, db, entry.AccountID)
+			if err != nil {
+				return err
+			}
+			accountsByID[entry.AccountID] = loadedAccount
+
 			state, err = r.readEntryLedgerState(ctx, db, entry.AccountID)
 			if err != nil {
 				return err
 			}
 		}
 
-		state.SequenceNumber++
-		state.RunningBalance = applyEntryToBalance(state.RunningBalance, entry)
-		stateByAccount[entry.AccountID] = state
-		entry.SetSequenceNumber(state.SequenceNumber)
-		entry.SetRunningBalance(state.RunningBalance)
+		updatedState, err := accountsByID[entry.AccountID].ApplyEntry(
+			state,
+			entry.Direction,
+			entry.Amount,
+		)
+		if err != nil {
+			return err
+		}
+		stateByAccount[entry.AccountID] = updatedState
+		assignments = append(assignments, entryAssignment{
+			entry: entry,
+			state: updatedState,
+		})
+	}
+
+	for _, assignment := range assignments {
+		assignment.entry.SetSequenceNumber(assignment.state.SequenceNumber)
+		assignment.entry.SetRunningBalance(assignment.state.RunningBalance)
 	}
 	return nil
 }
 
-// EntryLedgerState contains the last persisted state used to calculate a new entry.
-// An account without entries starts at sequence zero and balance zero.
-type EntryLedgerState struct {
-	AccountID      string
-	SequenceNumber int64
-	RunningBalance int64
+type entryAssignment struct {
+	entry *transaction.Entry
+	state account.LedgerState
 }
 
-func (r *TransactionRepository) readEntryLedgerState(ctx context.Context, db database.Querier, accountID string) (EntryLedgerState, error) {
-	state := EntryLedgerState{AccountID: accountID}
+func (r *TransactionRepository) readAccountLedgerConfig(ctx context.Context, db database.Querier, accountID string) (account.Account, error) {
+	var accountType, balancePolicy, currency string
+	err := db.QueryRow(ctx, `
+		SELECT type, balance_policy, currency
+		FROM accounts
+		WHERE id = $1`, accountID).Scan(&accountType, &balancePolicy, &currency)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return account.Account{}, account.ErrAccountNotFound
+	}
+	if err != nil {
+		return account.Account{}, err
+	}
+	return account.Account{
+		AccountType:   account.Type(accountType),
+		BalancePolicy: account.BalancePolicy(balancePolicy),
+		Currency:      money.Currency(currency),
+	}, nil
+}
+
+// readEntryLedgerState returns the last persisted state or the empty state for a new account.
+func (r *TransactionRepository) readEntryLedgerState(ctx context.Context, db database.Querier, accountID string) (account.LedgerState, error) {
+	state := account.LedgerState{AccountID: accountID}
 	err := db.QueryRow(ctx, `
 		SELECT sequence_number, running_balance
 		FROM entries
@@ -131,16 +170,9 @@ func (r *TransactionRepository) readEntryLedgerState(ctx context.Context, db dat
 		return state, nil
 	}
 	if err != nil {
-		return EntryLedgerState{}, err
+		return account.LedgerState{}, err
 	}
 	return state, nil
-}
-
-func applyEntryToBalance(balance int64, entry *transaction.Entry) int64 {
-	if entry.Direction == transaction.Debit {
-		return balance - entry.Amount.Amount()
-	}
-	return balance + entry.Amount.Amount()
 }
 
 func (r *TransactionRepository) Find(ctx context.Context, params criteria.TransactionCriteria) (*transaction.Transaction, error) {

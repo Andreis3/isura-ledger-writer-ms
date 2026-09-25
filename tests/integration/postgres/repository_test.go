@@ -228,6 +228,20 @@ var _ = ginkgo.Describe("transaction repository", ginkgo.Ordered, func() {
 		assertLedgerRecords(ctx, pool, rolledBack.ID.String(), 0, 0, 0)
 	})
 
+	ginkgo.It("rejects insufficient balance before creating ledger records", func() {
+		accountA, accountB := insertAccounts(ctx, tx)
+		_, err := tx.Exec(ctx, `UPDATE accounts SET balance_policy = 'BALANCE_NON_NEGATIVE' WHERE id IN ($1, $2)`, accountA, accountB)
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+
+		entityTransaction := newTransaction(accountA, accountB)
+		err = repository.NewTransactionRepository(pool).Save(database.WithTx(ctx, tx), entityTransaction)
+
+		gomega.Expect(errors.Is(err, fault.ErrInsufficientBalance)).To(gomega.BeTrue())
+		assertLedgerRecords(ctx, pool, entityTransaction.ID.String(), 0, 0, 0)
+		gomega.Expect(entityTransaction.Entries[0].SequenceNumber).To(gomega.Equal(int64(0)))
+		gomega.Expect(entityTransaction.Entries[1].SequenceNumber).To(gomega.Equal(int64(0)))
+	})
+
 	ginkgo.It("returns the same transaction and entries for an idempotency replay", func() {
 		accountA, accountB := insertAccounts(ctx, tx)
 		original := newTransaction(accountA, accountB)
@@ -361,8 +375,8 @@ var _ = ginkgo.Describe("transaction repository", ginkgo.Ordered, func() {
 		var debitBalance, creditBalance int64
 		gomega.Expect(tx.QueryRow(ctx, "SELECT running_balance FROM entries WHERE account_id = $1", accountA).Scan(&debitBalance)).To(gomega.Succeed())
 		gomega.Expect(tx.QueryRow(ctx, "SELECT running_balance FROM entries WHERE account_id = $1", accountB).Scan(&creditBalance)).To(gomega.Succeed())
-		gomega.Expect(debitBalance).To(gomega.Equal(int64(-1500)))
-		gomega.Expect(creditBalance).To(gomega.Equal(int64(1500)))
+		gomega.Expect(debitBalance).To(gomega.Equal(int64(1500)))
+		gomega.Expect(creditBalance).To(gomega.Equal(int64(-1500)))
 	})
 
 	ginkgo.It("does not expose mutation methods for confirmed ledger facts", func() {
@@ -473,7 +487,7 @@ var _ = ginkgo.Describe("transaction repository", ginkgo.Ordered, func() {
 func insertAccounts(ctx context.Context, tx pgx.Tx) (string, string) {
 	ids := []string{uuid.NewString(), uuid.NewString()}
 	for _, id := range ids {
-		_, err := tx.Exec(ctx, `INSERT INTO accounts (id, account_external_id, account_number, tax_id, status, type, balance_policy, currency, created_at, updated_at) VALUES ($1, $2, $3, $4, 'ACTIVE', 'CHECKING', 'BALANCE_UNRESTRICTED', 'BRL', $5, $5)`, id, uuid.NewString(), uuid.NewString(), "12345678901234", time.Now())
+		_, err := tx.Exec(ctx, `INSERT INTO accounts (id, account_external_id, account_number, tax_id, status, type, balance_policy, currency, created_at, updated_at) VALUES ($1, $2, $3, $4, 'ACTIVE', 'ASSET', 'BALANCE_UNRESTRICTED', 'BRL', $5, $5)`, id, uuid.NewString(), uuid.NewString(), "12345678901234", time.Now())
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 	}
 	return ids[0], ids[1]
@@ -481,7 +495,7 @@ func insertAccounts(ctx context.Context, tx pgx.Tx) (string, string) {
 
 func insertAccount(ctx context.Context, pool *pgxpool.Pool) string {
 	id := uuid.NewString()
-	_, err := pool.Exec(ctx, `INSERT INTO accounts (id, account_external_id, account_number, tax_id, status, type, balance_policy, currency, created_at, updated_at) VALUES ($1, $2, $3, $4, 'ACTIVE', 'CHECKING', 'BALANCE_UNRESTRICTED', 'BRL', $5, $5)`, id, uuid.NewString(), uuid.NewString(), "12345678901234", time.Now())
+	_, err := pool.Exec(ctx, `INSERT INTO accounts (id, account_external_id, account_number, tax_id, status, type, balance_policy, currency, created_at, updated_at) VALUES ($1, $2, $3, $4, 'ACTIVE', 'ASSET', 'BALANCE_UNRESTRICTED', 'BRL', $5, $5)`, id, uuid.NewString(), uuid.NewString(), "12345678901234", time.Now())
 	gomega.Expect(err).NotTo(gomega.HaveOccurred())
 	return id
 }
@@ -489,7 +503,11 @@ func insertAccount(ctx context.Context, pool *pgxpool.Pool) string {
 func insertAccountsForCommand(ctx context.Context, pool *pgxpool.Pool) (string, string) {
 	ids := []string{uuid.NewString(), uuid.NewString()}
 	for index, externalID := range ids {
-		_, err := pool.Exec(ctx, `INSERT INTO accounts (id, account_external_id, account_number, tax_id, status, type, balance_policy, currency, created_at, updated_at) VALUES ($1, $2, $3, $4, 'ACTIVE', 'ASSET', 'BALANCE_NON_NEGATIVE', 'BRL', $5, $5)`, newIDV7(), externalID, fmt.Sprintf("%d", time.Now().UnixNano()+int64(index)), "52998224725", time.Now())
+		accountType := "ASSET"
+		if index == 1 {
+			accountType = "LIABILITY"
+		}
+		_, err := pool.Exec(ctx, `INSERT INTO accounts (id, account_external_id, account_number, tax_id, status, type, balance_policy, currency, created_at, updated_at) VALUES ($1, $2, $3, $4, 'ACTIVE', $5, 'BALANCE_NON_NEGATIVE', 'BRL', $6, $6)`, newIDV7(), externalID, fmt.Sprintf("%d", time.Now().UnixNano()+int64(index)), "52998224725", accountType, time.Now())
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 	}
 	return ids[0], ids[1]
