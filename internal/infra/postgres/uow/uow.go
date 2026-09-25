@@ -3,7 +3,6 @@ package uow
 import (
 	"context"
 	"errors"
-	"math"
 	"math/rand/v2"
 	"time"
 
@@ -25,6 +24,14 @@ var (
 type UnitOfWork struct {
 	begin   func(context.Context) (pgx.Tx, error)
 	metrics application.Metrics
+}
+
+type retryPolicy struct {
+	maxAttempts int
+	baseDelay   time.Duration
+	maxDelay    time.Duration
+	jitter      func(time.Duration) time.Duration
+	wait        func(context.Context, time.Duration) error
 }
 
 func NewUnitOfWork(pool *pgxpool.Pool, metrics ...application.Metrics) *UnitOfWork {
@@ -61,13 +68,22 @@ func (u *UnitOfWork) WithTransaction(ctx context.Context, fn func(ctx context.Co
 }
 
 func (u *UnitOfWork) WithRetryableTransaction(ctx context.Context, fn func(ctx context.Context) error) error {
-	const maxRetries = 5
-	const baseDelay = 10 * time.Millisecond
-	const maxDelay = 200 * time.Millisecond
+	policy := retryPolicy{
+		maxAttempts: 5,
+		baseDelay:   10 * time.Millisecond,
+		maxDelay:    200 * time.Millisecond,
+		jitter: func(limit time.Duration) time.Duration {
+			if limit <= 0 {
+				return 0
+			}
+			return time.Duration(rand.Int64N(int64(limit)))
+		},
+		wait: waitForRetry,
+	}
 
-	return retryTransaction(ctx, maxRetries, func(ctx context.Context) error {
+	return retryTransactionWithPolicy(ctx, policy, func(ctx context.Context) error {
 		return u.WithTransaction(ctx, fn)
-	}, baseDelay, maxDelay, u.metrics)
+	}, u.metrics)
 }
 
 func retryTransaction(
@@ -78,11 +94,31 @@ func retryTransaction(
 	maxDelay time.Duration,
 	metrics ...application.Metrics,
 ) error {
+	return retryTransactionWithPolicy(ctx, retryPolicy{
+		maxAttempts: maxAttempts,
+		baseDelay:   baseDelay,
+		maxDelay:    maxDelay,
+		jitter: func(limit time.Duration) time.Duration {
+			if limit <= 0 {
+				return 0
+			}
+			return time.Duration(rand.Int64N(int64(limit)))
+		},
+		wait: waitForRetry,
+	}, operation, metrics...)
+}
+
+func retryTransactionWithPolicy(
+	ctx context.Context,
+	policy retryPolicy,
+	operation func(context.Context) error,
+	metrics ...application.Metrics,
+) error {
 	var metric application.Metrics
 	if len(metrics) > 0 {
 		metric = metrics[0]
 	}
-	for attempt := 0; attempt < maxAttempts; attempt++ {
+	for attempt := 0; attempt < policy.maxAttempts; attempt++ {
 		err := operation(ctx)
 		if err == nil {
 			return nil
@@ -92,31 +128,48 @@ func retryTransaction(
 			return err
 		}
 
-		if attempt == maxAttempts-1 {
+		if attempt == policy.maxAttempts-1 {
 			return fault.TransactionConflictError(errors.Join(err, ErrMaxRetriesExceeded))
 		}
 		if metric != nil {
 			metric.RecordConcurrencyRetry()
 		}
 
-		backoffLimit := float64(baseDelay) * math.Pow(2, float64(attempt))
-		if backoffLimit > float64(maxDelay) {
-			backoffLimit = float64(maxDelay)
-		}
-
-		sleepDuration := time.Duration(rand.Int64N(int64(backoffLimit)))
-
-		timer := time.NewTimer(sleepDuration)
-		select {
-		case <-timer.C:
-		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
-			return ctx.Err()
+		backoffLimit := retryBackoff(policy.baseDelay, policy.maxDelay, attempt)
+		if err := policy.wait(ctx, policy.jitter(backoffLimit)); err != nil {
+			return err
 		}
 	}
 	return fault.TransactionConflictError(ErrMaxRetriesExceeded)
+}
+
+func retryBackoff(baseDelay, maxDelay time.Duration, attempt int) time.Duration {
+	if baseDelay <= 0 || maxDelay <= 0 {
+		return 0
+	}
+	backoff := baseDelay
+	for index := 0; index < attempt && backoff < maxDelay; index++ {
+		if backoff > maxDelay/2 {
+			return maxDelay
+		}
+		backoff *= 2
+	}
+	if backoff > maxDelay {
+		return maxDelay
+	}
+	return backoff
+}
+
+func waitForRetry(ctx context.Context, duration time.Duration) error {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func isConcurrencyConflict(err error) bool {

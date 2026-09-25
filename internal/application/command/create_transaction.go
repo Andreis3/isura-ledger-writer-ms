@@ -16,6 +16,7 @@ import (
 	"github.com/andreis3/isura-ledger-ms/internal/domain/outbox"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/transaction"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/postgres/repository/criteria"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 const createTransactionCommand = "CreateTransaction"
@@ -86,7 +87,7 @@ func (c *CreateTransaction) Execute(ctx context.Context, input dto.CreateTransac
 			return nil
 		}
 
-		debitAccount, creditAccount, err := c.lockAccounts(txCtx, input.DebitAccountID, input.CreditAccountID)
+		debitAccount, creditAccount, err := c.loadAccounts(txCtx, input.DebitAccountID, input.CreditAccountID)
 		if err != nil {
 			return err
 		}
@@ -112,16 +113,60 @@ func (c *CreateTransaction) Execute(ctx context.Context, input dto.CreateTransac
 			Status:           string(entityTransaction.Status),
 			IdempotentReplay: false,
 		}
-		c.metrics.RecordIdempotencyTotal("new")
 		return nil
 	})
 	if err != nil {
+		replay, replayErr := c.replayAfterIdempotencyRace(ctx, input, requestFingerprint, err)
+		if replayErr != nil {
+			return c.fail(span, replayErr, "transaction failed")
+		}
+		output = replay
+	}
+	if output == nil {
 		return c.fail(span, err, "transaction failed")
+	}
+	if output.IdempotentReplay {
+		c.metrics.RecordIdempotencyTotal("replay")
+	} else {
+		c.metrics.RecordIdempotencyTotal("new")
 	}
 
 	c.metrics.RecordCommandTotal(createTransactionCommand, commandState(output))
 	c.log.InfoJSON("CreateTransaction completed", slog.String("trace_id", span.SpanContext().TraceID()), slog.Bool("idempotent_replay", output.IdempotentReplay))
 	return output, nil
+}
+
+func (c *CreateTransaction) replayAfterIdempotencyRace(
+	ctx context.Context,
+	input dto.CreateTransactionInput,
+	fingerprint string,
+	err error,
+) (*dto.CreateTransactionOutput, error) {
+	if !isIdempotencyUniqueViolation(err) {
+		return nil, err
+	}
+
+	existing, findErr := c.findByIdempotencyKey(ctx, input.IdempotencyKey)
+	if findErr != nil {
+		return nil, findErr
+	}
+	if existing == nil {
+		return nil, err
+	}
+	if existing.Fingerprint != fingerprint {
+		c.metrics.RecordIdempotencyTotal("conflict")
+		return nil, fault.IdempotencyConflictError(errors.New("idempotency fingerprint mismatch"))
+	}
+	return replayOutput(existing), nil
+}
+
+func isIdempotencyUniqueViolation(err error) bool {
+	pgErr, ok := errors.AsType[*pgconn.PgError](err)
+	if !ok || pgErr.Code != "23505" {
+		return false
+	}
+	return pgErr.ConstraintName == "idx_transactions_idempotency_key" ||
+		pgErr.ConstraintName == "transactions_idempotency_key_key"
 }
 
 func (c *CreateTransaction) findByIdempotencyKey(ctx context.Context, key *string) (*transaction.Transaction, error) {
@@ -135,7 +180,7 @@ func (c *CreateTransaction) findByIdempotencyKey(ctx context.Context, key *strin
 	return existing, nil
 }
 
-func (c *CreateTransaction) lockAccounts(ctx context.Context, debitID, creditID *string) (*account.Account, *account.Account, error) {
+func (c *CreateTransaction) loadAccounts(ctx context.Context, debitID, creditID *string) (*account.Account, *account.Account, error) {
 	firstID, secondID := debitID, creditID
 	if *firstID > *secondID {
 		firstID, secondID = secondID, firstID
@@ -143,17 +188,18 @@ func (c *CreateTransaction) lockAccounts(ctx context.Context, debitID, creditID 
 
 	first, err := c.accountRepository.FindAccount(ctx, criteria.AccountCriteria{
 		AccountExternalID: firstID,
-		HasForUpdate:      true,
 	})
 	if err != nil {
 		return nil, nil, err
 	}
-	second, err := c.accountRepository.FindAccount(ctx, criteria.AccountCriteria{
-		AccountExternalID: secondID,
-		HasForUpdate:      true,
-	})
-	if err != nil {
-		return nil, nil, err
+	second := first
+	if *secondID != *firstID {
+		second, err = c.accountRepository.FindAccount(ctx, criteria.AccountCriteria{
+			AccountExternalID: secondID,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 	if first == nil || second == nil {
 		return nil, nil, fault.FindAccountNotFoundError(account.ErrAccountNotFound)
