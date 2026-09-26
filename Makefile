@@ -53,6 +53,7 @@ help:
 	@echo "   make proto-lint       - Valida a sintaxe dos arquivos .proto com Buf"
 	@echo "   make proto-gen        - Gera o código Go a partir dos protos"
 	@echo "   make migrate          - Aplica as migrations do banco via Atlas"
+	@echo "   make backfill-balances - Pré-visualiza (ou aplica) saldos históricos"
 	@echo "======================================================================"
 
 run-app:
@@ -72,10 +73,10 @@ air:
 	@air -c .air.toml
 
 unit:
-	@go test ./tests/unit/... ./internal/infra/nats/... ./internal/infra/postgres/uow/... --tags=unit -v
+	@go test ./tests/unit/... ./internal/infra/nats/... ./internal/infra/postgres/uow/... ./cmd/backfill --tags=unit -v
 
 unit-verbose:
-	ginkgo -r -v --no-color --race --tags=unit --randomize-all --randomize-suites --fail-on-pending ./tests/unit/... ./internal/infra/nats/... ./internal/infra/postgres/uow/...
+	ginkgo -r -v --no-color --race --tags=unit --randomize-all --randomize-suites --fail-on-pending ./tests/unit/... ./internal/infra/nats/... ./internal/infra/postgres/uow/... ./cmd/backfill
 
 unit-cover:
 	@go test ./tests/unit/... -coverpkg ./internal/... --tags=unit
@@ -147,6 +148,10 @@ migrate:
 	  -u "$(DB_URL)" \
 	  --to "file://$(SCHEMA_DIR)"
 
+BACKFILL_ARGS ?=
+backfill-balances:
+	go run ./cmd/backfill $(BACKFILL_ARGS)
+
 
 
 .PHONY: build,
@@ -163,6 +168,7 @@ migrate:
 		proto-lint,
 		proto-gen,
 		migrate,
+		backfill-balances,
 		air,
 		run-race,
 		test-load,

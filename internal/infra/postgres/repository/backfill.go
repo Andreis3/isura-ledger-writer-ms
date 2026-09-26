@@ -55,8 +55,14 @@ func NewHistoricalBalanceBackfill(db database.Querier) *HistoricalBalanceBackfil
 // updates only running_balance and commits only when the caller commits the
 // transaction carried by ctx.
 func (b *HistoricalBalanceBackfill) Run(ctx context.Context) (BackfillReport, error) {
-	if _, ok := database.ExtractTx(ctx); !ok {
+	tx, ok := database.ExtractTx(ctx)
+	if !ok {
 		return BackfillReport{}, ErrBackfillTransactionRequired
+	}
+	// Keep the account configuration and ledger snapshot stable until the
+	// caller commits or rolls back the backfill transaction.
+	if _, err := tx.Exec(ctx, `LOCK TABLE accounts, entries IN SHARE ROW EXCLUSIVE MODE`); err != nil {
+		return BackfillReport{}, fmt.Errorf("lock ledger tables for historical balance backfill: %w", err)
 	}
 
 	report := BackfillReport{ReadyForActivation: true}
