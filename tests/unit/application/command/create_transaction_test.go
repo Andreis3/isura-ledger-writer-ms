@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"reflect"
 	"time"
 
 	"github.com/andreis3/isura-ledger-ms/internal/application"
@@ -86,6 +87,8 @@ var _ = Describe("CreateTransaction", func() {
 		Expect(result.Status).To(Equal(string(transaction.Completed)))
 		Expect(result.IdempotentReplay).To(BeTrue())
 		Expect(transactions.saved).To(BeNil())
+		Expect(transactions.findCriteria.IdempotencyKey).NotTo(BeNil())
+		Expect(*transactions.findCriteria.IdempotencyKey).To(Equal(*input.IdempotencyKey))
 	})
 
 	It("rejects reuse of an idempotency key with a different fingerprint", func() {
@@ -132,6 +135,23 @@ var _ = Describe("CreateTransaction", func() {
 			creditExternalID, debitExternalID,
 			creditExternalID, debitExternalID,
 		}))
+		Expect(transactions.attempts).To(HaveLen(2))
+		Expect(transactions.attempts[0]).NotTo(BeIdenticalTo(transactions.attempts[1]))
+		Expect(transactions.attempts[0].ID).NotTo(Equal(transactions.attempts[1].ID))
+		for index := range transactions.attempts[0].Entries {
+			Expect(transactions.attempts[0].Entries[index].ID).NotTo(Equal(transactions.attempts[1].Entries[index].ID))
+		}
+	})
+
+	It("keeps the selected Entry ID assignment method names", func() {
+		entryType := reflect.TypeOf((*transaction.Entry)(nil))
+		_, hasAccountID := entryType.MethodByName("AddAccountID")
+		_, hasTransactionID := entryType.MethodByName("AddTransactionID")
+		_, hasMisspelledAlias := entryType.MethodByName("AddTransnactionID")
+
+		Expect(hasAccountID).To(BeTrue())
+		Expect(hasTransactionID).To(BeTrue())
+		Expect(hasMisspelledAlias).To(BeFalse())
 	})
 
 	It("replays after a concurrent request wins the idempotency race", func() {
@@ -240,12 +260,15 @@ type transactionRepository struct {
 	existing       *transaction.Transaction
 	existingOnSave *transaction.Transaction
 	saved          *transaction.Transaction
+	findCriteria   transaction.TransactionCriteria
 	saveErrors     []error
 	saveCalls      int
+	attempts       []*transaction.Transaction
 }
 
 func (r *transactionRepository) Save(_ context.Context, value *transaction.Transaction) error {
 	r.saveCalls++
+	r.attempts = append(r.attempts, value)
 	if len(r.saveErrors) > 0 {
 		err := r.saveErrors[0]
 		r.saveErrors = r.saveErrors[1:]
@@ -258,7 +281,8 @@ func (r *transactionRepository) Save(_ context.Context, value *transaction.Trans
 	return nil
 }
 
-func (r *transactionRepository) Find(_ context.Context, _ criteria.TransactionCriteria) (*transaction.Transaction, error) {
+func (r *transactionRepository) Find(_ context.Context, params transaction.TransactionCriteria) (*transaction.Transaction, error) {
+	r.findCriteria = params
 	if r.existing == nil {
 		return nil, transaction.ErrTransactionNotFound
 	}

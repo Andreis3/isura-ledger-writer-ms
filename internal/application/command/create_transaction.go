@@ -68,6 +68,7 @@ func (c *CreateTransaction) Execute(ctx context.Context, input dto.CreateTransac
 	var output *dto.CreateTransactionOutput
 	err = c.uow.WithRetryableTransaction(ctx, func(txCtx context.Context) error {
 		output = nil
+		// Rebuild the aggregate on every attempt so retries use fresh IDs and transaction state.
 		entityTransaction, err := input.CreateTransactionFacade()
 		if err != nil {
 			return err
@@ -170,7 +171,7 @@ func isIdempotencyUniqueViolation(err error) bool {
 }
 
 func (c *CreateTransaction) findByIdempotencyKey(ctx context.Context, key *string) (*transaction.Transaction, error) {
-	existing, err := c.transactionRepository.Find(ctx, criteria.TransactionCriteria{IdempotencyKey: key})
+	existing, err := c.transactionRepository.Find(ctx, transaction.TransactionCriteria{IdempotencyKey: key})
 	if errors.Is(err, transaction.ErrTransactionNotFound) {
 		return nil, nil
 	}
@@ -223,7 +224,7 @@ func validateAccounts(debit, credit *account.Account, currency money.Currency) e
 
 func assignEntryReferences(entityTransaction *transaction.Transaction, debit, credit *account.Account) {
 	for _, entry := range entityTransaction.Entries {
-		entry.AddTransnactionID(entityTransaction.ID.String())
+		entry.AddTransactionID(entityTransaction.ID.String())
 		if entry.Direction == transaction.Debit {
 			entry.AddAccountID(debit.ID.String())
 			continue

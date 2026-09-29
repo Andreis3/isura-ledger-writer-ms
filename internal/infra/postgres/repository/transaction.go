@@ -175,7 +175,7 @@ func (r *TransactionRepository) readEntryLedgerState(ctx context.Context, db dat
 	return state, nil
 }
 
-func (r *TransactionRepository) Find(ctx context.Context, params criteria.TransactionCriteria) (*transaction.Transaction, error) {
+func (r *TransactionRepository) Find(ctx context.Context, params transaction.TransactionCriteria) (*transaction.Transaction, error) {
 	db := resolveDB(ctx, r.db)
 	query, args := criteria.GetTransactionCriteria(`
 		SELECT id, idempotency_key, request_fingerprint, status, amount, operation,

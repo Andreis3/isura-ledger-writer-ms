@@ -372,6 +372,12 @@ var _ = ginkgo.Describe("transaction repository", ginkgo.Ordered, func() {
 		gomega.Expect(replayed.ID).To(gomega.Equal(original.ID))
 		gomega.Expect(replayed.Fingerprint).To(gomega.Equal(original.Fingerprint))
 		gomega.Expect(replayed.Entries).To(gomega.HaveLen(2))
+
+		id := original.ID.String()
+		byID, err := repo.Find(txContext, transaction.TransactionCriteria{ID: &id, WithEntries: true})
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		gomega.Expect(byID.ID).To(gomega.Equal(original.ID))
+		gomega.Expect(byID.Entries).To(gomega.HaveLen(2))
 	})
 
 	ginkgo.It("serializes concurrent requests with the same idempotency key", func() {
@@ -911,8 +917,8 @@ func newOutbox(transactionID string) *outbox.Outbox {
 	return entry
 }
 
-func criteriaForKey(key string) criteria.TransactionCriteria {
-	return criteria.TransactionCriteria{IdempotencyKey: &key, WithEntries: true}
+func criteriaForKey(key string) transaction.TransactionCriteria {
+	return transaction.TransactionCriteria{IdempotencyKey: &key, WithEntries: true}
 }
 
 func assertLedgerRecords(ctx context.Context, pool *pgxpool.Pool, transactionID string, transactions, entries, outboxes int) {
