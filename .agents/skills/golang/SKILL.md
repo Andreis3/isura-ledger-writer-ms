@@ -21,8 +21,19 @@ Os exemplos estão separados por contexto. Consulte a referência correspondente
 - [Métricas Prometheus](references/prometheus.md)
 - [Tracing OpenTelemetry](references/tracer.md)
 - [Persistência PostgreSQL](references/postgres.md)
+- [Concorrência em Go — guia baseado nos livros](references/go-concurrency-guide.md)
+- [Performance em Go — guia baseado nos livros](references/go-performance-guide.md)
+- [Tipos, interfaces e generics — guia baseado nos livros](references/go-types-generics-guide.md)
+- [DDD e arquitetura — guia baseado nos livros](references/ddd-architecture-guide.md)
+- [Serviços, resiliência e operação — guia baseado nos livros](references/service-resilience-guide.md)
 
 As dez boas práticas adicionais estão em [references/additional-practices.md](references/additional-practices.md). Aplique-as quando forem pertinentes ao código alterado.
+
+## Base de conhecimento derivada dos livros
+
+As referências com sufixo `-guide.md` consolidam princípios dos livros usados como base de engenharia do projeto em regras operacionais para o agente. Consulte somente as referências pertinentes à tarefa para evitar carregar contexto desnecessário.
+
+Esses guias complementam as regras específicas do repositório. Em caso de conflito, siga a ordem de autoridade definida no `AGENTS.md` e preserve as decisões arquiteturais já estabelecidas no projeto. Não aplique uma recomendação genérica de livro de forma automática quando ela violar uma invariância ou decisão explícita do ledger.
 
 ## Organização
 
