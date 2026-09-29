@@ -320,7 +320,7 @@ var _ = ginkgo.Describe("transaction repository", ginkgo.Ordered, func() {
 	})
 
 	ginkgo.It("approves only one of two concurrent debits that consume the available balance", func() {
-		debitExternalID, creditExternalID := insertFundedAccountsForCommand(ctx, pool, 100)
+		debitExternalID, creditExternalID := insertFundedAccountsForCommand(ctx, pool, 100, 10)
 		createTransaction := newIntegrationCreateTransaction(pool)
 
 		start := make(chan struct{})
@@ -365,7 +365,7 @@ var _ = ginkgo.Describe("transaction repository", ginkgo.Ordered, func() {
 			ORDER BY e.sequence_number DESC
 			LIMIT 1`, debitExternalID).Scan(&sourceBalance)).To(gomega.Succeed())
 		gomega.Expect(sourceEntries).To(gomega.Equal(int64(2)))
-		gomega.Expect(sourceSequence).To(gomega.Equal(int64(2)))
+		gomega.Expect(sourceSequence).To(gomega.Equal(int64(11)))
 		gomega.Expect(sourceBalance).To(gomega.Equal(int64(0)))
 
 		var createdTransactions int
@@ -376,7 +376,7 @@ var _ = ginkgo.Describe("transaction repository", ginkgo.Ordered, func() {
 	})
 
 	ginkgo.It("replays a successful transaction without creating another entry", func() {
-		debitExternalID, creditExternalID := insertFundedAccountsForCommand(ctx, pool, 100)
+		debitExternalID, creditExternalID := insertFundedAccountsForCommand(ctx, pool, 100, 1)
 		createTransaction := newIntegrationCreateTransaction(pool)
 		key := "replay-" + uuid.NewString()
 
@@ -594,7 +594,7 @@ func insertAccountsForCommand(ctx context.Context, pool *pgxpool.Pool) (string, 
 	return ids[0], ids[1]
 }
 
-func insertFundedAccountsForCommand(ctx context.Context, pool *pgxpool.Pool, balance int64) (string, string) {
+func insertFundedAccountsForCommand(ctx context.Context, pool *pgxpool.Pool, balance, sequence int64) (string, string) {
 	debitExternalID := uuid.NewString()
 	creditExternalID := uuid.NewString()
 	debitID := newIDV7()
@@ -628,8 +628,8 @@ func insertFundedAccountsForCommand(ctx context.Context, pool *pgxpool.Pool, bal
 	} {
 		_, err = pool.Exec(ctx, `
 			INSERT INTO entries (id, account_id, transaction_id, sequence_number, direction, amount, running_balance, currency, created_at)
-			VALUES ($1, $2, $3, 1, $4, $5, $6, 'BRL', $7)`,
-			newIDV7(), entry.accountID, seedTransactionID, entry.direction, balance, entry.balance, now)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, 'BRL', $8)`,
+			newIDV7(), entry.accountID, seedTransactionID, sequence, entry.direction, balance, entry.balance, now)
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 	}
 	return debitExternalID, creditExternalID

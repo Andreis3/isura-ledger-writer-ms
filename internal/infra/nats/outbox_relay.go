@@ -18,8 +18,6 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 )
 
-const relayShutdownTimeout = 15 * time.Second
-
 type outboxJetStream interface {
 	PublishMsg(context.Context, *nats.Msg, ...jetstream.PublishOpt) (*jetstream.PubAck, error)
 }
@@ -57,7 +55,8 @@ func NewOutboxRelay(repository outbox.Repository, js outboxJetStream, tracer app
 	return &OutboxRelay{repository: repository, jetstream: js, tracer: tracer, log: log, metrics: metrics, config: config, workers: workers}
 }
 
-// Run polls until ctx is canceled and drains publications already claimed.
+// Run polls until ctx is canceled. publishBatch waits for every claimed item
+// before returning, so cancellation cannot leave this relay's workers running.
 func (r *OutboxRelay) Run(ctx context.Context) error {
 	ticker := time.NewTicker(r.config.PollInterval)
 	defer ticker.Stop()
@@ -68,7 +67,6 @@ func (r *OutboxRelay) Run(ctx context.Context) error {
 		}
 		select {
 		case <-ctx.Done():
-			r.drain(ctx)
 			return nil
 		case <-ticker.C:
 		}
@@ -151,12 +149,4 @@ func (r *OutboxRelay) publishDLQ(ctx context.Context, item *outbox.Outbox) error
 	msg.Header.Set("Nats-Msg-Id", item.ID.String()+".dlq")
 	_, err := r.jetstream.PublishMsg(ctx, msg)
 	return err
-}
-
-func (r *OutboxRelay) drain(ctx context.Context) {
-	drainCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), relayShutdownTimeout)
-	defer cancel()
-	if _, err := r.repository.ClaimPending(drainCtx, r.config.BatchSize, r.config.MaxAttempts, r.config.RetryAfter); err != nil && drainCtx.Err() == nil {
-		r.log.WarnJSON("outbox relay drain claim failed", slog.String("error", err.Error()))
-	}
 }
