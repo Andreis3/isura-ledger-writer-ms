@@ -135,6 +135,7 @@ var _ = Describe("CreateTransaction", func() {
 			creditExternalID, debitExternalID,
 			creditExternalID, debitExternalID,
 		}))
+		Expect(transactions.findCalls).To(Equal(2))
 		Expect(transactions.attempts).To(HaveLen(2))
 		Expect(transactions.attempts[0]).NotTo(BeIdenticalTo(transactions.attempts[1]))
 		Expect(transactions.attempts[0].ID).NotTo(Equal(transactions.attempts[1].ID))
@@ -261,6 +262,7 @@ type transactionRepository struct {
 	existingOnSave *transaction.Transaction
 	saved          *transaction.Transaction
 	findCriteria   transaction.TransactionCriteria
+	findCalls      int
 	saveErrors     []error
 	saveCalls      int
 	attempts       []*transaction.Transaction
@@ -282,6 +284,7 @@ func (r *transactionRepository) Save(_ context.Context, value *transaction.Trans
 }
 
 func (r *transactionRepository) Find(_ context.Context, params transaction.TransactionCriteria) (*transaction.Transaction, error) {
+	r.findCalls++
 	r.findCriteria = params
 	if r.existing == nil {
 		return nil, transaction.ErrTransactionNotFound
