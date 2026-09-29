@@ -17,10 +17,10 @@ Confira as regras do projeto e a TechSpec antes de apontar qualquer problema. Ex
    **Conclua quando:** cada mudança tiver sido conferida contra as regras aplicáveis.
 
 3. **Aderência à TechSpec** — compare a implementação com o especificado:
-    - [ ] Arquitetura conforme especificado
-    - [ ] Componentes, interfaces e contratos conforme definidos
-    - [ ] Modelos de dados conforme documentados
-    - [ ] Endpoints/APIs e integrações, quando aplicáveis, conforme especificados
+   - [ ] Arquitetura conforme especificado
+   - [ ] Componentes, interfaces e contratos conforme definidos
+   - [ ] Modelos de dados conforme documentados
+   - [ ] Endpoints/APIs e integrações, quando aplicáveis, conforme especificados
 
    **Conclua quando:** cada decisão da TechSpec tiver sido confirmada como implementada ou registrada como desvio justificado.
 
@@ -31,16 +31,16 @@ Confira as regras do projeto e a TechSpec antes de apontar qualquer problema. Ex
    **Conclua quando:** todos os comandos aplicáveis definidos no `AGENTS.md` tiverem sido executados, com testes passando e a cobertura mínima respeitada quando aplicável.
 
 6. **Corrigir e revalidar** — para cada problema encontrado:
-    - corrija a causa raiz e ajuste ou crie os testes necessários;
-    - se a correção exigir alteração do PRD, da TechSpec ou do escopo, registre o problema como bloqueador e solicite uma decisão ao usuário;
-    - execute novamente os testes e repita as verificações relevantes.
+   - corrija a causa raiz e ajuste ou crie os testes necessários;
+   - se a correção exigir alteração do PRD, da TechSpec ou do escopo, registre o problema como bloqueador e solicite uma decisão ao usuário;
+   - execute novamente os testes e repita as verificações relevantes.
 
    **Conclua quando:** não houver problemas bloqueadores e os testes e as verificações relevantes tiverem sido executados novamente.
 
 7. **Reportar** — gere o `codereview.md` seguindo `./references/TEMPLATE.md` desta skill, com o veredito:
-    - **APROVADO** — critérios atendidos, testes passando, código conforme as regras e a TechSpec.
-    - **APROVADO COM RESSALVAS** — principais critérios atendidos; melhorias recomendadas, mas não bloqueantes.
-    - **REPROVADO** — testes falhando, violação grave de padrão, falta de aderência à TechSpec ou problema de segurança.
+   - **APROVADO** — critérios atendidos, testes passando, código conforme as regras e a TechSpec.
+   - **APROVADO COM RESSALVAS** — principais critérios atendidos; melhorias recomendadas, mas não bloqueantes.
+   - **REPROVADO** — testes falhando, violação grave de padrão, falta de aderência à TechSpec ou problema de segurança.
 
    **Conclua quando:** o `codereview.md` estiver salvo conforme o template, com o veredito registrado.
 

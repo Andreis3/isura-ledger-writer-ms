@@ -11,9 +11,8 @@ This service is the financial source of truth — it records all debit and credi
 - Double-entry bookkeeping — debit + credit = 0, always atomic via a single PostgreSQL transaction
 - Real-time balance per account
 - Transaction idempotency via `idempotency_key` with `UNIQUE CONSTRAINT`
-- Hold/Release for fund reservations (card authorizations, pending Pix)
-- Reliable event publishing via Transactional Outbox → Kafka
-- Accounting representation of accounts (asset, liability, revenue, expense)
+- Reliable event publishing via Transactional Outbox → NATS JetStream
+- Accounting representation of accounts (asset, liability, revenue, expense, equity)
 
 ---
 
@@ -44,7 +43,6 @@ isura-ledger-ms/
 ├── Dockerfile.local                  # Build e container para desenvolvimento local com Air
 ├── Makefile                          # Comandos automatizados para build, migrações e testes
 ├── README.md                         # Documentação principal do projeto
-├── TODO.md                           # Lista de pendências e roadmap de fases
 ├── buf.gen.yaml                      # Configuração de geração de código Go do Buf v2
 ├── buf.yaml                          # Configuração do módulo Protobuf do Buf v2
 ├── cmd/
@@ -247,9 +245,10 @@ Entry {
   ID             EntryID
   TransactionID  TransactionID
   AccountID      AccountID
+  SequenceNumber int64
+  RunningBalance int64
   Direction      DEBIT | CREDIT
   Amount         Money
-  IdempotencyKey string
   CreatedAt      time.Time
 }
 ```
@@ -262,8 +261,9 @@ Accounting representation of a bank account within the ledger. Not the same as t
 Account {
   ID             AccountID
   AccountExternalID     string      // ID from isura-account-ms (correlation key)
-  AccountingType ASSET | LIABILITY | REVENUE | EXPENSE
-  Balance        Money
+  AccountingType ASSET | LIABILITY | REVENUE | EXPENSE | EQUITY
+  BalancePolicy  BALANCE_NON_NEGATIVE | BALANCE_UNRESTRICTED
+  Currency       Currency
   CreatedAt      time.Time
   UpdatedAt      time.Time
 }
@@ -271,7 +271,7 @@ Account {
 
 ### OutboxEvent — Aggregate
 
-Ensures reliable event delivery to Kafka without dual writes. Persisted in the same PostgreSQL transaction as the `Transaction`. A background relay reads `PENDING` events with `SELECT FOR UPDATE SKIP LOCKED` and publishes to Kafka.
+Ensures reliable event delivery to NATS JetStream without dual writes. Persisted in the same PostgreSQL transaction as the `Transaction`. The relay claims pending events in PostgreSQL and publishes them to JetStream using the outbox ID as `Nats-Msg-Id` for deduplication.
 
 ```
 PENDING → FAILED    ✓  (publish attempt failed)
@@ -286,20 +286,31 @@ SUCCESS → any       ✗
 
 ### Transactional Outbox
 
-All writes within `CreateTransaction` happen in a single PostgreSQL transaction:
+The writer persists each transaction, its entries, and its outbox event atomically. The outbox relay then publishes committed events to NATS JetStream:
+
+```text
+CreateTransaction
+       │
+       └── PostgreSQL transaction
+             ├── transactions
+             ├── entries (financial postings sequenced per account)
+             └── outbox_events
+                     │
+                     └── OutboxRelay → NATS JetStream
+```
+
+All writes happen in one PostgreSQL transaction:
 
 ```
 BEGIN
   INSERT INTO transactions ...
   INSERT INTO entries ...      (debit)
   INSERT INTO entries ...      (credit)
-  UPDATE accounts SET balance  (debit account)
-  UPDATE accounts SET balance  (credit account)
   INSERT INTO outbox_events ... (event payload)
 COMMIT
 ```
 
-If the commit fails, nothing is persisted — including the outbox event. If the commit succeeds, the relay will eventually publish the event to Kafka. No dual write, no inconsistency.
+`entries` records financial postings in per-account `sequence_number` order. Each entry stores a derived `running_balance`; the latest entry provides the current balance projection. The `accounts` table stores account identity and policy, not a mutable balance. If the commit fails, neither entries nor the outbox event are persisted. After commit, the relay publishes the event to JetStream.
 
 ### Idempotency
 
@@ -310,12 +321,12 @@ Every transaction carries an `idempotency_key`. A `UNIQUE CONSTRAINT` on the `tr
 The `UnitOfWork` interface wraps the PostgreSQL transaction lifecycle. All repository calls within a use case's `Execute` method receive a `context.Context` carrying the active `pgx.Tx`. Each repository's `resolveDB` method picks the transaction over the connection pool when present.
 
 ```go
-return c.uow.WithTransaction(ctx, func(ctxTx context.Context) error {
-    // all writes here share the same pgx.Tx
-    c.transactionRepo.Save(ctxTx, tx)
-    c.accountRepo.UpdateBalance(ctxTx, ...)
-    c.outboxRepo.Save(ctxTx, event)
-    return nil
+return c.uow.WithRetryableTransaction(ctx, func(ctxTx context.Context) error {
+    // transaction, entries, and outbox use one pgx.Tx
+    if err := c.transactionRepository.Save(ctxTx, tx); err != nil {
+        return err
+    }
+    return c.outboxRepository.Save(ctxTx, event)
 })
 ```
 
@@ -330,22 +341,23 @@ Write operations live in `application/command/`, read operations in `application
 | Layer | Technology                          |
 |---|-------------------------------------|
 | Transport | gRPC + Protobuf                     |
-| Language | Go 1.26.4                           |
-| Persistence | PostgreSQL 16 + pgx/v5              |
-| Migrations | golang-migrate                      |
-| Events | Apache Kafka (Transactional Outbox) |
-| Observability | OpenTelemetry                       |
-| Container | Docker + Kubernetes                 |
+| Language | Go 1.26.x                           |
+| Persistence | PostgreSQL 18 + pgx/v5              |
+| Migrations | Atlas                               |
+| Events | NATS JetStream (Transactional Outbox) |
+| Observability | OpenTelemetry + Prometheus          |
+| Container | Docker + Docker Compose             |
 
 ### Key dependencies
 
 ```
 github.com/jackc/pgx/v5          # PostgreSQL driver
 github.com/google/uuid           # UUID generation
-github.com/golang-migrate/migrate # Database migrations
+github.com/nats-io/nats.go       # NATS JetStream client
 google.golang.org/grpc           # gRPC server
 google.golang.org/protobuf       # Protobuf serialization
-go.opentelemetry.io/otel         # Observability
+go.opentelemetry.io/otel         # Tracing and metrics
+github.com/prometheus/client_golang # Prometheus metrics
 ```
 
 ---
@@ -356,7 +368,7 @@ go.opentelemetry.io/otel         # Observability
 
 - Go 1.26.4+
 - Docker and Docker Compose
-- `golang-migrate` CLI
+- `atlas` CLI for schema changes
 
 ### Setup
 
@@ -365,26 +377,26 @@ go.opentelemetry.io/otel         # Observability
 git clone https://github.com/andreis3/isura-ledger-ms
 cd isura-ledger-ms
 
-# start PostgreSQL and Kafka
-docker compose up -d
+# create local config and start dependencies
+cp config.example.json config.json
+make up
 
-# run migrations
-make migrate-up
+# apply schema
+make migrate
 
 # start the service
-go run ./cmd/server/main.go
+make run-app
 ```
 
 ### Makefile commands
 
 ```bash
-make migrate-up      # apply all pending migrations
-make migrate-down    # rollback last migration
-make test            # run unit tests
-make test-int        # run integration tests
-make proto           # regenerate protobuf files
-make lint            # run golangci-lint
-make build           # build binary
+make migrate         # apply the Atlas schema
+make unit            # run unit tests
+make integration-tests # run integration tests
+make proto-lint      # lint protobuf contracts
+make proto-gen       # regenerate protobuf files
+make build           # build the application image
 ```
 
 ---
@@ -392,30 +404,27 @@ make build           # build binary
 ## Environment variables
 
 ```env
-# Database
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=isura_ledger
-DB_USER=postgres
-DB_PASSWORD=postgres
-DB_MAX_CONNS=20
-DB_MIN_CONNS=5
-
-# gRPC
+# Server ports
 GRPC_PORT=50051
+HTTP_PORT=8080
 
-# Kafka
-KAFKA_BROKERS=localhost:9092
-KAFKA_TOPIC_LEDGER_EVENTS=ledger.events
+# PostgreSQL
+POSTGRES_HOST=localhost
+POSTGRES_PORT=5432
+POSTGRES_USER=admin
+POSTGRES_PASSWORD=admin
+POSTGRES_DB=isura_ledger_main
+
+# NATS and tracing
+NATS_URL=nats://localhost:4222
+OTEL_HOST=localhost
 
 # Outbox relay
-OUTBOX_RELAY_INTERVAL_MS=500
-OUTBOX_RELAY_BATCH_SIZE=50
-OUTBOX_MAX_ATTEMPTS=3
-
-# Observability
-OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
-OTEL_SERVICE_NAME=isura-ledger-ms
+NATS_RELAY_BATCH_SIZE=100
+NATS_RELAY_MAX_WORKERS=4
+NATS_RELAY_MAX_ATTEMPTS=3
+NATS_RELAY_POLL_INTERVAL=1s
+NATS_RELAY_RETRY_AFTER=5s
 ```
 
 ---
@@ -429,7 +438,7 @@ OTEL_SERVICE_NAME=isura-ledger-ms
 | `transactions` | Aggregate root — one record per transaction |
 | `entries` | Double-entry records — always two per transaction |
 | `accounts` | Accounting representation of accounts |
-| `outbox_events` | Transactional outbox — pending Kafka events |
+| `outbox_events` | Transactional outbox — pending NATS JetStream events |
 
 ### Key constraints
 

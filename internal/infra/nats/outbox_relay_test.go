@@ -19,12 +19,14 @@ import (
 )
 
 type relayRepository struct {
-	items  []*outbox.Outbox
-	update outbox.UpdateOutboxData
+	items      []*outbox.Outbox
+	update     outbox.UpdateOutboxData
+	claimCalls int
 }
 
 func (r *relayRepository) Save(context.Context, *outbox.Outbox) error { return nil }
 func (r *relayRepository) ClaimPending(context.Context, int, int, time.Duration) ([]*outbox.Outbox, error) {
+	r.claimCalls++
 	return r.items, nil
 }
 func (r *relayRepository) FindAll(context.Context, outbox.StatusOutbox, int) ([]*outbox.Outbox, error) {
@@ -36,12 +38,18 @@ func (r *relayRepository) UpdateOutboxData(_ context.Context, _ entity.ID, data 
 }
 
 type relayJetStream struct {
-	msg *nats.Msg
-	err error
+	msg       *nats.Msg
+	err       error
+	onPublish func(context.Context)
+	calls     int
 }
 
-func (j *relayJetStream) PublishMsg(_ context.Context, msg *nats.Msg, _ ...jetstream.PublishOpt) (*jetstream.PubAck, error) {
+func (j *relayJetStream) PublishMsg(ctx context.Context, msg *nats.Msg, _ ...jetstream.PublishOpt) (*jetstream.PubAck, error) {
 	j.msg = msg
+	j.calls++
+	if j.onPublish != nil {
+		j.onPublish(ctx)
+	}
 	return nil, j.err
 }
 
@@ -115,6 +123,30 @@ func TestOutboxRelayPublishesDLQAfterMaxAttempts(t *testing.T) {
 	}
 	if repo.update.Status != outbox.Failed {
 		t.Fatalf("status = %q, want %q", repo.update.Status, outbox.Failed)
+	}
+}
+
+func TestOutboxRelayDoesNotClaimAdditionalItemsAfterShutdown(t *testing.T) {
+	item, err := outbox.NewOutbox("transaction-id", []byte("payload"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := &relayRepository{items: []*outbox.Outbox{item}}
+	ctx, cancel := context.WithCancel(context.Background())
+	js := &relayJetStream{onPublish: func(context.Context) { cancel() }}
+	relay := newRelayForTest(repo, js, 3)
+
+	if err := relay.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if repo.claimCalls != 1 {
+		t.Fatalf("claim calls = %d, want 1", repo.claimCalls)
+	}
+	if js.calls != 1 {
+		t.Fatalf("publish calls = %d, want 1", js.calls)
+	}
+	if repo.update.Status != outbox.Success {
+		t.Fatalf("status = %q, want %q", repo.update.Status, outbox.Success)
 	}
 }
 

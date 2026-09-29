@@ -10,7 +10,7 @@ O QA só estará **APROVADO** quando todos os critérios de aceitação do PRD t
 
 ## Fluxo
 
-1. **Analisar** — leia o `AGENTS.md`, todas as rules em `.agents/rules/` e as skills em `.agents/skills/golang`, o PRD, a TechSpec e cada arquivo de tarefa; monte um checklist com um item de verificação por critério de aceitação (`CA-*`) e associe os casos de teste correspondentes (`TU-*`, `TI-*` e `E2E-*`).
+1. **Analisar** — leia o `AGENTS.md`, todas as rules em `.agents/rules/`, o PRD, a TechSpec e cada arquivo de tarefa; monte um checklist com um item de verificação por critério de aceitação (`CA-*`) e associe os casos de teste correspondentes (`TU-*`, `TI-*` e `E2E-*`).
    **Conclua quando:** houver um item de verificação e pelo menos um caso de teste associado a cada critério de aceitação do PRD.
 
 2. **Preparar o ambiente** — suba os serviços necessários para a validação em um ambiente isolado da worktree. Use uma porta disponível na faixa `30**` (por exemplo, `3000–3099`) para o backend, uma porta disponível na faixa `51**` (por exemplo, `5100–5199`) para o frontend e uma faixa própria para cada banco ou serviço adicional. Verifique cada porta antes de iniciar o processo; se estiver ocupada, escolha outra dentro da faixa. Configure as URLs entre os serviços, registre as portas e os processos iniciados e abra a aplicação pela ferramenta de navegador disponível.
