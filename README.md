@@ -310,7 +310,9 @@ BEGIN
 COMMIT
 ```
 
-`entries` records financial postings in per-account `sequence_number` order. Each entry stores a derived `running_balance`; the latest entry provides the current balance projection. The `accounts` table stores account identity and policy, not a mutable balance. If the commit fails, neither entries nor the outbox event are persisted. After commit, the relay publishes the event to JetStream.
+`accounts` stores account identity, currency, status, and balance policy. For ledger transactions, `entries` is the append-only record of financial postings, ordered per account by `sequence_number`; each entry stores the resulting `running_balance`, and the latest entry provides the balance used by the transaction flow. The normal transaction flow inserts entries and does not update or delete previously committed entries. The existing `balances` table and its account-creation event handler are a separate legacy/bootstrap record and are not the source used to calculate a transaction's running balance. This initiative does not change or remove that table. If a transaction commit fails, its transaction, entries, and outbox event are all rolled back. After commit, the relay publishes the event to JetStream.
+
+`transactions` stores the operation envelope, status, and idempotency key/fingerprint. `outbox_events` stores integration events in the same PostgreSQL transaction as their ledger operation; the relay publishes committed events to JetStream and can retry failed deliveries. Historical balance backfill is a separate operational maintenance flow that can recalculate `entries.running_balance`; it is outside the normal append-only transaction flow and is not changed here.
 
 ### Idempotency
 
@@ -438,6 +440,7 @@ NATS_RELAY_RETRY_AFTER=5s
 | `transactions` | Aggregate root — one record per transaction |
 | `entries` | Double-entry records — always two per transaction |
 | `accounts` | Accounting representation of accounts |
+| `balances` | Existing legacy/bootstrap balance record created by the account balance event flow; not used to calculate transaction running balances |
 | `outbox_events` | Transactional outbox — pending NATS JetStream events |
 
 ### Key constraints
