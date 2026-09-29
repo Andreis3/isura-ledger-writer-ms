@@ -36,7 +36,8 @@ var _ = Describe("CreateTransaction", func() {
 		accounts := newAccountRepository()
 		transactions := &transactionRepository{}
 		outboxes := &outboxRepository{}
-		sut := newCommand(accounts, transactions, outboxes, &unitOfWork{})
+		metrics := newTestMetrics()
+		sut := newCommand(accounts, transactions, outboxes, &unitOfWork{}, metrics)
 
 		result, err := sut.Execute(context.Background(), input)
 
@@ -47,6 +48,7 @@ var _ = Describe("CreateTransaction", func() {
 		Expect(transactions.saved.Status).To(Equal(transaction.Completed))
 		Expect(transactions.saved.Entries).To(HaveLen(2))
 		Expect(outboxes.saved).NotTo(BeNil())
+		Expect(metrics.idempotencyCounts).To(Equal(map[string]int{"new": 1}))
 		Expect(accounts.findCalls).To(Equal([]string{creditExternalID, debitExternalID}))
 
 		var event transaction.TransactionCreated
@@ -78,7 +80,8 @@ var _ = Describe("CreateTransaction", func() {
 		Expect(persisted.Complete()).To(Succeed())
 		accounts := newAccountRepository()
 		transactions := &transactionRepository{existing: persisted}
-		sut := newCommand(accounts, transactions, &outboxRepository{}, &unitOfWork{})
+		metrics := newTestMetrics()
+		sut := newCommand(accounts, transactions, &outboxRepository{}, &unitOfWork{}, metrics)
 
 		result, err := sut.Execute(context.Background(), input)
 
@@ -89,6 +92,7 @@ var _ = Describe("CreateTransaction", func() {
 		Expect(transactions.saved).To(BeNil())
 		Expect(transactions.findCriteria.IdempotencyKey).NotTo(BeNil())
 		Expect(*transactions.findCriteria.IdempotencyKey).To(Equal(*input.IdempotencyKey))
+		Expect(metrics.idempotencyCounts).To(Equal(map[string]int{"replay": 1}))
 	})
 
 	It("rejects reuse of an idempotency key with a different fingerprint", func() {
@@ -98,13 +102,15 @@ var _ = Describe("CreateTransaction", func() {
 		persisted.Fingerprint = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 		accounts := newAccountRepository()
 		transactions := &transactionRepository{existing: persisted}
-		sut := newCommand(accounts, transactions, &outboxRepository{}, &unitOfWork{})
+		metrics := newTestMetrics()
+		sut := newCommand(accounts, transactions, &outboxRepository{}, &unitOfWork{}, metrics)
 
 		result, err := sut.Execute(context.Background(), input)
 
 		Expect(result).To(BeNil())
 		Expect(err).To(MatchError(ContainSubstring("idempotency fingerprint mismatch")))
 		Expect(transactions.saved).To(BeNil())
+		Expect(metrics.idempotencyCounts).To(Equal(map[string]int{"conflict": 1}))
 	})
 
 	It("returns no output when the outbox write fails and the unit of work rolls back", func() {
@@ -164,13 +170,15 @@ var _ = Describe("CreateTransaction", func() {
 			saveErrors:     []error{&pgconn.PgError{Code: "23505", ConstraintName: "idx_transactions_idempotency_key"}},
 			existingOnSave: persisted,
 		}
-		sut := newCommand(newAccountRepository(), transactions, &outboxRepository{}, &unitOfWork{})
+		metrics := newTestMetrics()
+		sut := newCommand(newAccountRepository(), transactions, &outboxRepository{}, &unitOfWork{}, metrics)
 
 		result, err := sut.Execute(context.Background(), input)
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.TransactionID).To(Equal(new(persisted.ID.String())))
 		Expect(result.IdempotentReplay).To(BeTrue())
+		Expect(metrics.idempotencyCounts).To(Equal(map[string]int{"replay": 1}))
 	})
 
 	It("rejects a concurrent idempotency race with a different fingerprint", func() {
@@ -182,13 +190,15 @@ var _ = Describe("CreateTransaction", func() {
 			saveErrors:     []error{&pgconn.PgError{Code: "23505", ConstraintName: "idx_transactions_idempotency_key"}},
 			existingOnSave: persisted,
 		}
-		sut := newCommand(newAccountRepository(), transactions, &outboxRepository{}, &unitOfWork{})
+		metrics := newTestMetrics()
+		sut := newCommand(newAccountRepository(), transactions, &outboxRepository{}, &unitOfWork{}, metrics)
 
 		result, err := sut.Execute(context.Background(), input)
 
 		Expect(result).To(BeNil())
 		Expect(err).To(MatchError(ContainSubstring("idempotency fingerprint mismatch")))
 		Expect(transactions.saved).To(BeNil())
+		Expect(metrics.idempotencyCounts).To(Equal(map[string]int{"conflict": 1}))
 	})
 })
 
@@ -321,8 +331,12 @@ func (r *outboxRepository) UpdateOutboxData(context.Context, entity.ID, outbox.U
 	return nil
 }
 
-func newCommand(accounts *accountRepository, transactions *transactionRepository, outboxes *outboxRepository, uow application.UnitOfWork) *command.CreateTransaction {
-	return command.NewCreateTransaction(uow, accounts, transactions, outboxes, testTracer{}, testLogger{}, testMetrics{})
+func newCommand(accounts *accountRepository, transactions *transactionRepository, outboxes *outboxRepository, uow application.UnitOfWork, metrics ...*testMetrics) *command.CreateTransaction {
+	var recorder application.Metrics = newTestMetrics()
+	if len(metrics) > 0 {
+		recorder = metrics[0]
+	}
+	return command.NewCreateTransaction(uow, accounts, transactions, outboxes, testTracer{}, testLogger{}, recorder)
 }
 
 type testTracer struct{}
@@ -357,7 +371,13 @@ func (testLogger) WithTrace(context.Context) *slog.Logger { return slog.Default(
 func (testLogger) SlogJSON() *slog.Logger                 { return slog.Default() }
 func (testLogger) SlogText() *slog.Logger                 { return slog.Default() }
 
-type testMetrics struct{}
+type testMetrics struct {
+	idempotencyCounts map[string]int
+}
+
+func newTestMetrics() *testMetrics {
+	return &testMetrics{idempotencyCounts: make(map[string]int)}
+}
 
 func (testMetrics) RecordRequestTotal(string, string, int)                {}
 func (testMetrics) RecordDBQueryDuration(string, string, string, float64) {}
@@ -365,6 +385,6 @@ func (testMetrics) RecordRequestDuration(string, string, int, float64)    {}
 func (testMetrics) RecordTransactionTotal(string)                         {}
 func (testMetrics) RecordCommandTotal(string, string)                     {}
 func (testMetrics) RecordCommandDuration(string, float64)                 {}
-func (testMetrics) RecordIdempotencyTotal(string)                         {}
+func (m *testMetrics) RecordIdempotencyTotal(state string)                { m.idempotencyCounts[state]++ }
 func (testMetrics) RecordConcurrencyRetry()                               {}
 func (testMetrics) RecordOutboxTotal(string, string)                      {}

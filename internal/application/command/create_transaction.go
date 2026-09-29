@@ -83,7 +83,6 @@ func (c *CreateTransaction) Execute(ctx context.Context, input dto.CreateTransac
 				c.metrics.RecordIdempotencyTotal("conflict")
 				return fault.IdempotencyConflictError(errors.New("idempotency fingerprint mismatch"))
 			}
-			c.metrics.RecordIdempotencyTotal("replay")
 			output = replayOutput(existing)
 			return nil
 		}
