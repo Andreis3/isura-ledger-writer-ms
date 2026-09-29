@@ -9,7 +9,20 @@ metadata:
 
 Estas regras se aplicam a todo código Go deste repositório.
 
-Os exemplos estão separados por contexto. Consulte a referência correspondente quando precisar implementar ou revisar o padrão:
+Os exemplos estão separados por contexto. Consulte somente as referências pertinentes à tarefa.
+
+## Hierarquia de autoridade
+
+Quando duas orientações entrarem em tensão, use esta precedência:
+
+1. decisões e invariantes explícitas do Isura Ledger;
+2. regras específicas deste repositório e do `AGENTS.md`;
+3. guias de engenharia derivados dos livros;
+4. práticas Go genéricas.
+
+Uma recomendação genérica não deve sobrescrever silenciosamente uma decisão arquitetural consciente do ledger. Mudanças nessas decisões exigem análise de trade-offs e, quando duradouras, ADR.
+
+## Referências específicas do repositório
 
 - [Factories e composição](references/factories.md)
 - [Composição de repositories](references/composer.md)
@@ -21,12 +34,17 @@ Os exemplos estão separados por contexto. Consulte a referência correspondente
 - [Métricas Prometheus](references/prometheus.md)
 - [Tracing OpenTelemetry](references/tracer.md)
 - [Persistência PostgreSQL](references/postgres.md)
+
+## Guias de engenharia
+
 - [Concorrência em Go — guia baseado nos livros](references/go-concurrency-guide.md)
 - [Performance em Go — guia baseado nos livros](references/go-performance-guide.md)
 - [Tipos, interfaces e generics — guia baseado nos livros](references/go-types-generics-guide.md)
 - [DDD e arquitetura — guia baseado nos livros](references/ddd-architecture-guide.md)
 - [Serviços, resiliência e operação — guia baseado nos livros](references/service-resilience-guide.md)
 - [Engenharia do Isura Ledger — invariantes e decisões do ledger](references/ledger-engineering-guide.md)
+
+O `ledger-engineering-guide.md` é a referência principal quando a alteração tocar saldo, entries, sequenciamento, idempotência, concorrência transacional, UoW, outbox ou reconciliação.
 
 As dez boas práticas adicionais estão em [references/additional-practices.md](references/additional-practices.md). Aplique-as quando forem pertinentes ao código alterado.
 
@@ -71,7 +89,7 @@ No encerramento, pare de aceitar trabalho novo, cancele consumidores e feche con
 - Logs de fluxo da aplicação e entrada de commands devem ser JSON estruturado, com campos como `command`, `request_id`, `trace_id`, `account_id` e `error`.
 - Logs informativos operacionais, como a porta do servidor, devem ser TEXT legível.
 - Nunca registre senhas, tokens, credenciais ou dados sensíveis.
-- Use spans do OpenTelemetry em operações relevantes, propague o contexto, registre falhas com `span.RecordError(err)` e marque o status.
+- Use spans do OpenTelemetry em operações relevantes, propague o contexto, registre falhas com `span.RecordError(err)`. Não acesse o SDK diretamente para contornar a abstração de tracing.
 - Exponha métricas Prometheus para requests, erros, duração e jobs. Use labels de baixa cardinalidade; nunca use IDs de usuário, conta ou request como labels.
 
 ## Verificação
