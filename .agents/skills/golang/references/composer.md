@@ -1,6 +1,6 @@
 # Composição de repositories e publishers
 
-O arquivo `internal/infra/dependency/composer_repository.go` centraliza a composição dos adapters de persistência e publicação usados pela aplicação. Ele transforma clientes de infraestrutura presentes em `BaseDeps` em implementações dos contratos definidos nos pacotes de domínio.
+O arquivo `internal/infra/dependency/composer.go` centraliza a composição dos adapters de persistência e publicação usados pela aplicação. Ele transforma clientes de infraestrutura presentes em `BaseDeps` em implementações dos contratos definidos nos pacotes de domínio.
 
 ## Responsabilidades
 
@@ -70,6 +70,8 @@ Use o `Nats.JS` já inicializado em `BaseDeps`; não abra uma nova conexão no c
 5. Injete o método nas factories que compõem o command.
 6. Preserve o fluxo de dependências `transport → application → domain ← infrastructure`.
 
+O contrato do domínio também não deve importar tipos de criteria definidos em `internal/infra/postgres/repository/criteria`. Quando uma operação de repository precisa de filtros, o tipo consumido pela porta deve pertencer à camada interna apropriada; o adapter PostgreSQL traduz esse contrato para SQL/criteria de infraestrutura.
+
 Não coloque regras de negócio, validação de entidade, tratamento de protocolo ou decisão de transação no composer. Ele é um assembler de dependências.
 
 ## Checklist de revisão
@@ -86,7 +88,7 @@ Não coloque regras de negócio, validação de entidade, tratamento de protocol
 Depois de alterar o composer, execute:
 
 ```bash
-gofmt -w internal/infra/dependency/composer_repository.go
+gofmt -w internal/infra/dependency/composer.go
 go test ./...
 go vet ./...
 ```
