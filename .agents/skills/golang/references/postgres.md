@@ -66,7 +66,7 @@ Não esconda transações em variáveis globais nem faça um repository abrir um
 
 - `WithTransaction`: begin, execução da função, rollback em erro e commit em sucesso;
 - `WithRetryableTransaction`: retry limitado para conflito de concorrência;
-- erros classificados por `fault.BeginTransactionError`, `fault.RollbackTransactionError`, `fault.CommitTransactionError` e `fault.ConflictError`.
+- erros classificados por `fault.BeginTransactionError`, `fault.RollbackTransactionError`, `fault.CommitTransactionError` e, no esgotamento dos retries de concorrência, `fault.TransactionConflictError`.
 
 Uso esperado:
 
@@ -85,12 +85,16 @@ Regras do UoW:
 - não use o contexto original dentro da transação, pois isso ignora o `pgx.Tx` armazenado;
 - rollback usa timeout de 5 segundos para não ficar bloqueado indefinidamente;
 - retries são limitados a 5 tentativas;
-- somente a violação PostgreSQL `23505` da constraint `unique_account_sequence` é considerada conflito retryable;
+- `40001` (`serialization_failure`) e `40P01` (`deadlock_detected`) são conflitos retryable;
+- `23505` é retryable somente quando a constraint é `unique_entry_sequence_number`;
+- outras violações `23505`, inclusive conflitos de idempotência, não devem ser tratadas automaticamente como retry de sequenciamento;
 - o backoff usa jitter e limite máximo de 200 ms;
 - cancelamento do contexto interrompe a espera entre tentativas;
 - não faça retry de erros de validação, indisponibilidade genérica ou falhas não classificadas como conflito.
 
-O UoW não deve conter regra de negócio; ele controla atomicidade e retry de uma condição técnica conhecida.
+O UoW não deve conter regra de negócio; ele controla atomicidade e retry de condições técnicas conhecidas. O `UnitOfWork` pode receber `application.Metrics` para registrar retries de concorrência sem acoplar o domínio ao PostgreSQL.
+
+Para regras específicas do ledger — por que a unique de sequência participa da concorrência, por que o aggregate precisa ser reconstruído e como o saldo é recalculado — consulte `ledger-engineering-guide.md`.
 
 ## Modelos PostgreSQL
 
@@ -147,11 +151,13 @@ O repository de transaction usa batch para inserir a transação e suas entries.
 
 ## Critérios e locks
 
-Os builders em `repository/criteria` montam filtros opcionais e retornam query mais argumentos separados. Critérios devem continuar parametrizados e devem adicionar somente cláusulas conhecidas pelo código:
+Os builders em `repository/criteria` são detalhes do adapter PostgreSQL: montam filtros opcionais e retornam query mais argumentos separados. Eles não devem aparecer em interfaces do domínio. Critérios devem continuar parametrizados e devem adicionar somente cláusulas conhecidas pelo código:
 
 - `HasForUpdate`: espera a liberação do registro;
 - `HasForUpdateSkipLock`: ignora registros bloqueados e é apropriado para filas/consumidores;
 - `WithEntries`: controla a carga relacionada quando suportado pelo repository.
+
+Se uma porta interna precisa expressar filtros equivalentes, defina o contrato na camada interna apropriada e faça o adapter convertê-lo para o critério PostgreSQL. Não faça `internal/domain/**` importar `internal/infra/**`.
 
 Use `FOR UPDATE` apenas dentro de uma transação ativa quando o lock precisar ser mantido até o commit. Use `FOR UPDATE SKIP LOCKED` somente em fluxos que toleram pular registros já processados por outro worker.
 
