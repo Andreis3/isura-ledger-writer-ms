@@ -1,21 +1,13 @@
 package criteria
 
-import "strings"
+import (
+	"strings"
 
-// TransactionCriteria define os filtros e opções de lock para consultas de transações
-type TransactionCriteria struct {
-	ID                   *string
-	IdempotencyKey       *string
-	Status               *string
-	AccountID            *string
-	Type                 *string
-	HasForUpdate         bool // Bloqueio pessimista tradicional (aguarda a liberação do registo)
-	HasForUpdateSkipLock bool // Bloqueio que ignora registos já bloqueados (usado apenas em filas específicas)
-	WithEntries          bool
-}
+	"github.com/andreis3/isura-ledger-ms/internal/domain/transaction"
+)
 
-// GetTransactionCriteria constrói dinamicamente a query SQL e os respetivos argumentos com base nos critérios
-func GetTransactionCriteria(baseQuery string, params TransactionCriteria) (string, []any) {
+// GetTransactionCriteria traduz os critérios do domínio para filtros SQL parametrizados.
+func GetTransactionCriteria(baseQuery string, params transaction.TransactionCriteria) (string, []any) {
 	// Pré-aloca o slice com a capacidade máxima estimada de argumentos (filtros + folga)
 	args := make([]any, 0, 6)
 	argCount := 1
@@ -39,35 +31,6 @@ func GetTransactionCriteria(baseQuery string, params TransactionCriteria) (strin
 		argCount++
 	}
 
-	if params.Status != nil {
-		sb.WriteString(" AND status = $")
-		sb.WriteString(argNumToString(argCount))
-		args = append(args, *params.Status)
-		argCount++
-	}
-
-	if params.AccountID != nil {
-		sb.WriteString(" AND account_id = $")
-		sb.WriteString(argNumToString(argCount))
-		args = append(args, *params.AccountID)
-		argCount++
-	}
-
-	if params.Type != nil {
-		sb.WriteString(" AND type = $")
-		sb.WriteString(argNumToString(argCount))
-		args = append(args, *params.Type)
-		argCount++
-	}
-
 	sb.WriteString(" LIMIT 1")
-
-	// PostgreSQL exige LIMIT antes da cláusula de locking.
-	if params.HasForUpdate {
-		sb.WriteString(" FOR UPDATE")
-	} else if params.HasForUpdateSkipLock {
-		sb.WriteString(" FOR UPDATE SKIP LOCKED")
-	}
-
 	return sb.String(), args
 }

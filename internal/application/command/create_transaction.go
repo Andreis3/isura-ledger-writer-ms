@@ -170,7 +170,7 @@ func isIdempotencyUniqueViolation(err error) bool {
 }
 
 func (c *CreateTransaction) findByIdempotencyKey(ctx context.Context, key *string) (*transaction.Transaction, error) {
-	existing, err := c.transactionRepository.Find(ctx, criteria.TransactionCriteria{IdempotencyKey: key})
+	existing, err := c.transactionRepository.Find(ctx, transaction.TransactionCriteria{IdempotencyKey: key})
 	if errors.Is(err, transaction.ErrTransactionNotFound) {
 		return nil, nil
 	}

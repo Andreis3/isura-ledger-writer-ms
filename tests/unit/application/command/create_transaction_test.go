@@ -86,6 +86,8 @@ var _ = Describe("CreateTransaction", func() {
 		Expect(result.Status).To(Equal(string(transaction.Completed)))
 		Expect(result.IdempotentReplay).To(BeTrue())
 		Expect(transactions.saved).To(BeNil())
+		Expect(transactions.findCriteria.IdempotencyKey).NotTo(BeNil())
+		Expect(*transactions.findCriteria.IdempotencyKey).To(Equal(*input.IdempotencyKey))
 	})
 
 	It("rejects reuse of an idempotency key with a different fingerprint", func() {
@@ -240,6 +242,7 @@ type transactionRepository struct {
 	existing       *transaction.Transaction
 	existingOnSave *transaction.Transaction
 	saved          *transaction.Transaction
+	findCriteria   transaction.TransactionCriteria
 	saveErrors     []error
 	saveCalls      int
 }
@@ -258,7 +261,8 @@ func (r *transactionRepository) Save(_ context.Context, value *transaction.Trans
 	return nil
 }
 
-func (r *transactionRepository) Find(_ context.Context, _ criteria.TransactionCriteria) (*transaction.Transaction, error) {
+func (r *transactionRepository) Find(_ context.Context, params transaction.TransactionCriteria) (*transaction.Transaction, error) {
+	r.findCriteria = params
 	if r.existing == nil {
 		return nil, transaction.ErrTransactionNotFound
 	}
