@@ -150,8 +150,8 @@ func (b *EntryBuilder) Build() (*Entry, error) {
 	}, nil
 }
 
-func (e *Entry) AddAccountID(acountID string) {
-	e.AccountID = acountID
+func (e *Entry) AddAccountID(accountID string) {
+	e.AccountID = accountID
 }
 
 // SetSequenceNumber records the immutable sequence assigned by the ledger for this account.
