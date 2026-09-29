@@ -3,6 +3,7 @@
 package balance_test
 
 import (
+	"reflect"
 	"time"
 
 	"github.com/andreis3/isura-ledger-ms/internal/domain/balance"
@@ -13,6 +14,20 @@ import (
 )
 
 var _ = Describe("balance builder", func() {
+	It("associates a future creation date error with created_at", func() {
+		future := time.Now().AddDate(100, 0, 0)
+		builder := balance.NewBalanceBuilder().WithCreatedAt(future)
+		eval := reflect.ValueOf(builder).Elem().FieldByName("eval")
+		fields := eval.MapKeys()
+		fieldNames := make([]string, 0, len(fields))
+		for _, field := range fields {
+			fieldNames = append(fieldNames, field.String())
+		}
+
+		Expect(fieldNames).To(ContainElement("created_at"))
+		Expect(fieldNames).NotTo(ContainElement("updated_at"))
+	})
+
 	It("builds with explicit values", func() {
 		id := uuid.NewString()
 		accountID := uuid.NewString()

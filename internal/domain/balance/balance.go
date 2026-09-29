@@ -70,7 +70,7 @@ func (b *BalanceBuilder) WithAmount(amount int64, currency money.Currency) *Bala
 func (b *BalanceBuilder) WithCreatedAt(createdAt ...time.Time) *BalanceBuilder {
 	if len(createdAt) > 0 {
 		if !createdAt[0].IsZero() && createdAt[0].After(time.Now()) {
-			b.eval.CheckField(false, "updated_at", "cannot be in the future")
+			b.eval.CheckField(false, "created_at", "cannot be in the future")
 		}
 		b.CreatedAT = createdAt[0]
 		return b

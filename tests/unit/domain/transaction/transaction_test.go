@@ -4,7 +4,11 @@
 package transaction_test
 
 import (
+	"errors"
+	"time"
+
 	"github.com/andreis3/isura-ledger-ms/internal/domain/entity"
+	"github.com/andreis3/isura-ledger-ms/internal/domain/fault"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/money"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/transaction"
 	. "github.com/onsi/ginkgo/v2"
@@ -12,6 +16,49 @@ import (
 )
 
 var _ = Describe("INTERNAL :: DOMAIN :: TRANSACTION :: TRANSACTION", func() {
+	Describe("WithCreatedAt validation", func() {
+		It("reports created_at for a future entry creation date", func() {
+			amount, err := money.NewMoney(100, money.BRL)
+			Expect(err).NotTo(HaveOccurred())
+			transactionID, err := entity.NewIDV7()
+			Expect(err).NotTo(HaveOccurred())
+			future := time.Now().AddDate(100, 0, 0)
+
+			_, err = transaction.NewEntryBuilder().
+				WithID().
+				WithTransactionID(transactionID.String()).
+				WithAccountExternalID("e4e5e6e7-e8e9-410e-a11e-e12e13e14e15").
+				WithDirection(transaction.Credit).
+				WithAmount(amount).
+				WithCreatedAt(future).
+				Build()
+
+			var domainErr *fault.DomainError
+			Expect(errors.As(err, &domainErr)).To(BeTrue())
+			Expect(domainErr.Fields).To(HaveKeyWithValue("created_at", "cannot be in the future"))
+			Expect(domainErr.Fields).NotTo(HaveKey("updated_at"))
+		})
+
+		It("reports created_at for a future transaction creation date", func() {
+			amount, err := money.NewMoney(100, money.BRL)
+			Expect(err).NotTo(HaveOccurred())
+			future := time.Now().AddDate(100, 0, 0)
+
+			_, err = transaction.NewTransactionBuilder().
+				WithID().
+				WithIdempotencyKey("future-created-at-test").
+				WithAmount(amount).
+				WithOperation(transaction.OperationDeposit).
+				WithCreatedAt(future).
+				Build()
+
+			var domainErr *fault.DomainError
+			Expect(errors.As(err, &domainErr)).To(BeTrue())
+			Expect(domainErr.Fields).To(HaveKeyWithValue("created_at", "cannot be in the future"))
+			Expect(domainErr.Fields).NotTo(HaveKey("updated_at"))
+		})
+	})
+
 	Describe("#NewTransactionBuilder", func() {
 		Context("success cases", func() {
 			It("should not return an error when build new transaction", func() {

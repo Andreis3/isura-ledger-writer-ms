@@ -179,7 +179,7 @@ func (b *TransactionBuilder) WithEntries(entries []*Entry) *TransactionBuilder {
 func (b *TransactionBuilder) WithCreatedAt(createdAt ...time.Time) *TransactionBuilder {
 	if len(createdAt) > 0 {
 		if !createdAt[0].IsZero() && createdAt[0].After(time.Now()) {
-			b.eval.CheckField(false, "updated_at", "cannot be in the future")
+			b.eval.CheckField(false, "created_at", "cannot be in the future")
 		}
 		b.createdAt = createdAt[0]
 		return b
