@@ -26,6 +26,7 @@ Os exemplos estão separados por contexto. Consulte a referência correspondente
 - [Tipos, interfaces e generics — guia baseado nos livros](references/go-types-generics-guide.md)
 - [DDD e arquitetura — guia baseado nos livros](references/ddd-architecture-guide.md)
 - [Serviços, resiliência e operação — guia baseado nos livros](references/service-resilience-guide.md)
+- [Engenharia do Isura Ledger — invariantes e decisões do ledger](references/ledger-engineering-guide.md)
 
 As dez boas práticas adicionais estão em [references/additional-practices.md](references/additional-practices.md). Aplique-as quando forem pertinentes ao código alterado.
 
