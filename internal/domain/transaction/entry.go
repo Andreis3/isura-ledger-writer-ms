@@ -168,7 +168,3 @@ func (e *Entry) SetRunningBalance(balance int64) {
 func (e *Entry) AddTransactionID(transactionID string) {
 	e.TransactionID = transactionID
 }
-
-func (e *Entry) AddTransnactionID(transactionID string) {
-	e.AddTransactionID(transactionID)
-}

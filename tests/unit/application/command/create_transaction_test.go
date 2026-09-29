@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"reflect"
 	"time"
 
 	"github.com/andreis3/isura-ledger-ms/internal/application"
@@ -134,6 +135,23 @@ var _ = Describe("CreateTransaction", func() {
 			creditExternalID, debitExternalID,
 			creditExternalID, debitExternalID,
 		}))
+		Expect(transactions.attempts).To(HaveLen(2))
+		Expect(transactions.attempts[0]).NotTo(BeIdenticalTo(transactions.attempts[1]))
+		Expect(transactions.attempts[0].ID).NotTo(Equal(transactions.attempts[1].ID))
+		for index := range transactions.attempts[0].Entries {
+			Expect(transactions.attempts[0].Entries[index].ID).NotTo(Equal(transactions.attempts[1].Entries[index].ID))
+		}
+	})
+
+	It("keeps the selected Entry ID assignment method names", func() {
+		entryType := reflect.TypeOf((*transaction.Entry)(nil))
+		_, hasAccountID := entryType.MethodByName("AddAccountID")
+		_, hasTransactionID := entryType.MethodByName("AddTransactionID")
+		_, hasMisspelledAlias := entryType.MethodByName("AddTransnactionID")
+
+		Expect(hasAccountID).To(BeTrue())
+		Expect(hasTransactionID).To(BeTrue())
+		Expect(hasMisspelledAlias).To(BeFalse())
 	})
 
 	It("replays after a concurrent request wins the idempotency race", func() {
@@ -245,10 +263,12 @@ type transactionRepository struct {
 	findCriteria   transaction.TransactionCriteria
 	saveErrors     []error
 	saveCalls      int
+	attempts       []*transaction.Transaction
 }
 
 func (r *transactionRepository) Save(_ context.Context, value *transaction.Transaction) error {
 	r.saveCalls++
+	r.attempts = append(r.attempts, value)
 	if len(r.saveErrors) > 0 {
 		err := r.saveErrors[0]
 		r.saveErrors = r.saveErrors[1:]
