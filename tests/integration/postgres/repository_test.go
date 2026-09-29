@@ -156,6 +156,80 @@ var _ = ginkgo.Describe("transaction repository", ginkgo.Ordered, func() {
 		gomega.Expect(auditTx.Commit(ctx)).To(gomega.Succeed())
 	})
 
+	ginkgo.It("audits persisted entries without changing ledger records", func() {
+		accountID, transactionID, _ := insertReconciliationFixture(ctx, pool, 1, "DEBIT", 125, 125)
+		ginkgo.DeferCleanup(func() { deleteReconciliationFixture(ctx, pool, accountID, transactionID) })
+
+		before := reconciliationSnapshot(ctx, pool, accountID)
+		auditTx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		report, err := repository.NewLedgerReconciliation(pool).Run(database.WithTx(ctx, auditTx))
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		gomega.Expect(auditTx.Rollback(ctx)).To(gomega.Succeed())
+
+		gomega.Expect(report.AccountsChecked).To(gomega.BeNumerically(">=", 1))
+		gomega.Expect(report.EntriesChecked).To(gomega.BeNumerically(">=", 1))
+		gomega.Expect(report.Mismatches).NotTo(gomega.ContainElement(gomega.HaveField("AccountID", accountID)))
+		gomega.Expect(reconciliationSnapshot(ctx, pool, accountID)).To(gomega.Equal(before))
+	})
+
+	ginkgo.It("reports the replayed and persisted balances for a PostgreSQL mismatch", func() {
+		accountID, transactionID, _ := insertReconciliationFixture(ctx, pool, 1, "DEBIT", 125, 120)
+		ginkgo.DeferCleanup(func() { deleteReconciliationFixture(ctx, pool, accountID, transactionID) })
+
+		auditTx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		defer func() {
+			rollbackErr := auditTx.Rollback(ctx)
+			gomega.Expect(rollbackErr == nil || errors.Is(rollbackErr, pgx.ErrTxClosed)).To(gomega.BeTrue())
+		}()
+		report, err := repository.NewLedgerReconciliation(pool).Run(database.WithTx(ctx, auditTx))
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+
+		mismatch, found := reconciliationMismatchFor(report, accountID)
+		gomega.Expect(found).To(gomega.BeTrue())
+		gomega.Expect(mismatch.EntriesChecked).To(gomega.Equal(1))
+		gomega.Expect(mismatch.ExpectedBalance).To(gomega.Equal(int64(125)))
+		gomega.Expect(mismatch.PersistedBalance).To(gomega.Equal(int64(120)))
+		gomega.Expect(mismatch.Currency).To(gomega.Equal("BRL"))
+	})
+
+	ginkgo.It("returns an explicit error for an entry referencing an unknown account", func() {
+		transactionID := newIDV7()
+		entryID := newIDV7()
+		missingAccountID := newIDV7()
+		now := time.Now()
+		_, err := pool.Exec(ctx, `
+			INSERT INTO transactions (id, idempotency_key, request_fingerprint, status, operation, amount, currency, created_at, updated_at)
+			VALUES ($1, $2, $3, 'COMPLETED', 'TRANSFER', 75, 'BRL', $4, $4)`,
+			transactionID, uuid.NewString(), "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", now)
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		ginkgo.DeferCleanup(func() {
+			_, cleanupErr := pool.Exec(ctx, "DELETE FROM entries WHERE id = $1", entryID)
+			gomega.Expect(cleanupErr).NotTo(gomega.HaveOccurred())
+			_, cleanupErr = pool.Exec(ctx, "DELETE FROM transactions WHERE id = $1", transactionID)
+			gomega.Expect(cleanupErr).NotTo(gomega.HaveOccurred())
+		})
+		fixtureTx, err := pool.Begin(ctx)
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		_, err = fixtureTx.Exec(ctx, "SET LOCAL session_replication_role = replica")
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		_, err = fixtureTx.Exec(ctx, `
+			INSERT INTO entries (id, account_id, transaction_id, sequence_number, direction, amount, running_balance, currency, created_at)
+			VALUES ($1, $2, $3, 1, 'DEBIT', 75, 75, 'BRL', $4)`, entryID, missingAccountID, transactionID, now)
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		gomega.Expect(fixtureTx.Commit(ctx)).To(gomega.Succeed())
+
+		before := reconciliationEntrySnapshot(ctx, pool, entryID)
+		auditTx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		_, err = repository.NewLedgerReconciliation(pool).Run(database.WithTx(ctx, auditTx))
+		gomega.Expect(err).To(gomega.HaveOccurred())
+		gomega.Expect(err.Error()).To(gomega.ContainSubstring("unknown account"))
+		gomega.Expect(auditTx.Rollback(ctx)).To(gomega.Succeed())
+		gomega.Expect(reconciliationEntrySnapshot(ctx, pool, entryID)).To(gomega.Equal(before))
+	})
+
 	ginkgo.It("persists and reads the account balance policy", func() {
 		externalID := uuid.NewString()
 		entityAccount, err := account.NewAccountBuilder().
@@ -615,6 +689,64 @@ func insertAccounts(ctx context.Context, tx pgx.Tx) (string, string) {
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 	}
 	return ids[0], ids[1]
+}
+
+func insertReconciliationFixture(ctx context.Context, pool *pgxpool.Pool, sequence int64, direction string, amount, persistedBalance int64) (string, string, string) {
+	accountID, transactionID, entryID := newIDV7(), newIDV7(), newIDV7()
+	now := time.Now()
+	_, err := pool.Exec(ctx, `
+		INSERT INTO accounts (id, account_external_id, account_number, tax_id, status, type, balance_policy, currency, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, 'ACTIVE', 'ASSET', 'BALANCE_UNRESTRICTED', 'BRL', $5, $5)`,
+		accountID, uuid.NewString(), uuid.NewString(), "12345678901234", now)
+	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+	_, err = pool.Exec(ctx, `
+		INSERT INTO transactions (id, idempotency_key, request_fingerprint, status, operation, amount, currency, created_at, updated_at)
+		VALUES ($1, $2, $3, 'COMPLETED', 'TRANSFER', $4, 'BRL', $5, $5)`,
+		transactionID, uuid.NewString(), "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", amount, now)
+	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+	_, err = pool.Exec(ctx, `
+		INSERT INTO entries (id, account_id, transaction_id, sequence_number, direction, amount, running_balance, currency, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'BRL', $8)`,
+		entryID, accountID, transactionID, sequence, direction, amount, persistedBalance, now)
+	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+	return accountID, transactionID, entryID
+}
+
+func deleteReconciliationFixture(ctx context.Context, pool *pgxpool.Pool, accountID, transactionID string) {
+	_, err := pool.Exec(ctx, "DELETE FROM entries WHERE account_id = $1", accountID)
+	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+	_, err = pool.Exec(ctx, "DELETE FROM transactions WHERE id = $1", transactionID)
+	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+	_, err = pool.Exec(ctx, "DELETE FROM accounts WHERE id = $1", accountID)
+	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+}
+
+func reconciliationSnapshot(ctx context.Context, pool *pgxpool.Pool, accountID string) string {
+	var snapshot string
+	err := pool.QueryRow(ctx, `
+		SELECT
+			(SELECT COALESCE(jsonb_agg(to_jsonb(a)), '[]'::jsonb)::text FROM accounts a WHERE a.id = $1) || '|' ||
+			(SELECT COALESCE(jsonb_agg(to_jsonb(t)), '[]'::jsonb)::text FROM transactions t WHERE t.id IN (SELECT transaction_id FROM entries WHERE account_id = $1)) || '|' ||
+			(SELECT COALESCE(jsonb_agg(to_jsonb(e) ORDER BY e.sequence_number), '[]'::jsonb)::text FROM entries e WHERE e.account_id = $1) || '|' ||
+			(SELECT COALESCE(jsonb_agg(to_jsonb(o)), '[]'::jsonb)::text FROM outbox_events o WHERE o.aggregate_id IN (SELECT transaction_id::text FROM entries WHERE account_id = $1))`, accountID).Scan(&snapshot)
+	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+	return snapshot
+}
+
+func reconciliationEntrySnapshot(ctx context.Context, pool *pgxpool.Pool, entryID string) string {
+	var snapshot string
+	err := pool.QueryRow(ctx, `SELECT to_jsonb(e)::text FROM entries e WHERE e.id = $1`, entryID).Scan(&snapshot)
+	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+	return snapshot
+}
+
+func reconciliationMismatchFor(report repository.ReconciliationReport, accountID string) (repository.ReconciliationMismatch, bool) {
+	for _, mismatch := range report.Mismatches {
+		if mismatch.AccountID == accountID {
+			return mismatch, true
+		}
+	}
+	return repository.ReconciliationMismatch{}, false
 }
 
 func insertAccount(ctx context.Context, pool *pgxpool.Pool) string {
