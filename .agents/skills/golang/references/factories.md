@@ -11,7 +11,7 @@ As factories em `internal/infra/factory` são o ponto de composição dos handle
 - Criar o handler por último e injetar nele o command, logger e tracer.
 - Respeitar o transporte do handler: handlers REST ficam em `internal/transport/rest/handler`; handlers de fila ficam em `internal/transport/queue/handler`.
 
-A instanciação das ferramentas-base pertence a `internal/infra/dependency/base_deps.go`; a composição de repositories pertence a `internal/infra/dependency/composer_repository.go`; a factory apenas conecta essas peças ao caso de uso.
+A instanciação das ferramentas-base pertence a `internal/infra/dependency/base_deps.go`; a composição de repositories pertence a `internal/infra/dependency/composer.go`; a factory apenas conecta essas peças ao caso de uso.
 
 ## Factory REST com publisher
 
@@ -77,7 +77,7 @@ func NewCreateTransactionFactory(
 	baseDeps *dependency.BaseDeps,
 ) *handler.CreateTransactionHandler {
 	composeBuild := dependency.NewComposer(baseDeps)
-	uowDep := uow.NewUnitOfWork(baseDeps.Pg.Pool())
+	uowDep := uow.NewUnitOfWork(baseDeps.Pg.Pool(), baseDeps.Prom)
 	transactionCommand := command.NewCreateTransaction(
 		uowDep,
 		composeBuild.BuildAccountRepo(),
@@ -96,7 +96,7 @@ func NewCreateTransactionFactory(
 }
 ```
 
-O UoW recebe o pool já criado em `BaseDeps`; a factory não deve abrir ou fechar o pool. O lifecycle das dependências-base é responsabilidade do bootstrap/shutdown da aplicação.
+O UoW recebe o pool e as métricas já criados em `BaseDeps`; a factory não deve abrir ou fechar o pool. O lifecycle das dependências-base é responsabilidade do bootstrap/shutdown da aplicação.
 
 ## Checklist ao criar uma factory
 
@@ -104,6 +104,6 @@ O UoW recebe o pool já criado em `BaseDeps`; a factory não deve abrir ou fecha
 2. Crie `composeBuild := dependency.NewComposer(baseDeps)` quando precisar de repositories.
 3. Use os métodos `BuildAccountRepo`, `BuildBalance`, `BuildTransactionRepo` e `BuildOutboxRepo` em vez de instanciar repositories diretamente.
 4. Reutilize `baseDeps.Log`, `baseDeps.Tracer` e `baseDeps.Prom`.
-5. Use `baseDeps.Nats` para publishers e `baseDeps.Pg.Pool()` para UoW.
+5. Use `baseDeps.Nats` para publishers e `baseDeps.Pg.Pool()` + `baseDeps.Prom` para o UoW de transações.
 6. Mantenha a ordem de composição: dependências técnicas, command, handler.
 7. Não coloque regra de negócio, validação de domínio ou lógica de transporte na factory.
