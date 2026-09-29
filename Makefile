@@ -54,6 +54,7 @@ help:
 	@echo "   make proto-gen        - Gera o código Go a partir dos protos"
 	@echo "   make migrate          - Aplica as migrations do banco via Atlas"
 	@echo "   make backfill-balances - Pré-visualiza (ou aplica) saldos históricos"
+	@echo "   make reconcile-balances - Audita saldos sem alterar dados"
 	@echo "======================================================================"
 
 run-app:
@@ -152,6 +153,9 @@ BACKFILL_ARGS ?=
 backfill-balances:
 	go run ./cmd/backfill $(BACKFILL_ARGS)
 
+reconcile-balances:
+	go run ./cmd/reconcile
+
 
 
 .PHONY: build,
@@ -169,6 +173,7 @@ backfill-balances:
 		proto-gen,
 		migrate,
 		backfill-balances,
+		reconcile-balances,
 		air,
 		run-race,
 		test-load,

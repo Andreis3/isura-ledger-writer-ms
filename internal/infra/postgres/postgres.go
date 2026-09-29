@@ -17,6 +17,11 @@ type Postgres struct {
 }
 
 func NewPostgres(conf *configs.Configs) (*Postgres, error) {
+	return NewPostgresWithContext(context.Background(), conf)
+}
+
+// NewPostgresWithContext creates a PostgreSQL pool and validates connectivity within ctx.
+func NewPostgresWithContext(ctx context.Context, conf *configs.Configs) (*Postgres, error) {
 	connStr := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
 		conf.DataBase.Postgres.Host,
 		conf.DataBase.Postgres.Port,
@@ -58,13 +63,14 @@ func NewPostgres(conf *configs.Configs) (*Postgres, error) {
 	connConfig.HealthCheckPeriod = 15 * time.Second
 	connConfig.ConnConfig.RuntimeParams["application_name"] = conf.ApplicationName
 
-	pool, err := pgxpool.NewWithConfig(context.Background(), connConfig)
+	pool, err := pgxpool.NewWithConfig(ctx, connConfig)
 	if err != nil {
 		return nil, err
 	}
 
-	err = pool.Ping(context.Background())
+	err = pool.Ping(ctx)
 	if err != nil {
+		pool.Close()
 		return nil, err
 	}
 

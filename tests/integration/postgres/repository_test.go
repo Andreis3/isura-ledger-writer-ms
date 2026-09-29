@@ -113,6 +113,49 @@ var _ = ginkgo.Describe("transaction repository", ginkgo.Ordered, func() {
 		gomega.Expect(outboxes).To(gomega.Equal(1))
 	})
 
+	ginkgo.It("keeps reconciliation on one snapshot while a balance is updated concurrently", func() {
+		accountID := insertAccount(ctx, pool)
+		transactionID := newIDV7()
+		entryID := newIDV7()
+		now := time.Now()
+		_, err := pool.Exec(ctx, `
+			INSERT INTO transactions (id, idempotency_key, request_fingerprint, status, operation, amount, currency, created_at, updated_at)
+			VALUES ($1, $2, $3, 'COMPLETED', 'TRANSFER', 50, 'BRL', $4, $4)`,
+			transactionID, uuid.NewString(), "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", now)
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		_, err = pool.Exec(ctx, `
+			INSERT INTO entries (id, account_id, transaction_id, sequence_number, direction, amount, running_balance, currency, created_at)
+			VALUES ($1, $2, $3, 1, 'DEBIT', 50, 50, 'BRL', $4)`, entryID, accountID, transactionID, now)
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		ginkgo.DeferCleanup(func() {
+			_, cleanupErr := pool.Exec(ctx, "DELETE FROM entries WHERE id = $1", entryID)
+			gomega.Expect(cleanupErr).NotTo(gomega.HaveOccurred())
+			_, cleanupErr = pool.Exec(ctx, "DELETE FROM transactions WHERE id = $1", transactionID)
+			gomega.Expect(cleanupErr).NotTo(gomega.HaveOccurred())
+			_, cleanupErr = pool.Exec(ctx, "DELETE FROM accounts WHERE id = $1", accountID)
+			gomega.Expect(cleanupErr).NotTo(gomega.HaveOccurred())
+		})
+
+		auditTx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		ginkgo.DeferCleanup(func() {
+			rollbackErr := auditTx.Rollback(ctx)
+			gomega.Expect(rollbackErr == nil || errors.Is(rollbackErr, pgx.ErrTxClosed)).To(gomega.BeTrue())
+		})
+		var snapshotBalance int64
+		gomega.Expect(auditTx.QueryRow(ctx, "SELECT running_balance FROM entries WHERE id = $1", entryID).Scan(&snapshotBalance)).To(gomega.Succeed())
+		gomega.Expect(snapshotBalance).To(gomega.Equal(int64(50)))
+		_, err = pool.Exec(ctx, "UPDATE entries SET running_balance = 51 WHERE id = $1", entryID)
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+
+		report, err := repository.NewLedgerReconciliation(pool).Run(database.WithTx(ctx, auditTx))
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		gomega.Expect(report.EntriesChecked).To(gomega.Equal(1))
+		gomega.Expect(report.Reconciled).To(gomega.BeTrue())
+		gomega.Expect(report.MismatchCount).To(gomega.BeZero())
+		gomega.Expect(auditTx.Commit(ctx)).To(gomega.Succeed())
+	})
+
 	ginkgo.It("persists and reads the account balance policy", func() {
 		externalID := uuid.NewString()
 		entityAccount, err := account.NewAccountBuilder().
