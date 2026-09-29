@@ -73,10 +73,10 @@ air:
 	@air -c .air.toml
 
 unit:
-	@go test ./tests/unit/... ./internal/infra/nats/... ./internal/infra/postgres/uow/... ./cmd/backfill --tags=unit -v
+	@go test ./tests/unit/... ./internal/infra/nats/... ./internal/infra/postgres/uow/... ./internal/infra/postgres/repository/... ./cmd/backfill --tags=unit -v
 
 unit-verbose:
-	ginkgo -r -v --no-color --race --tags=unit --randomize-all --randomize-suites --fail-on-pending ./tests/unit/... ./internal/infra/nats/... ./internal/infra/postgres/uow/... ./cmd/backfill
+	ginkgo -r -v --no-color --race --tags=unit --randomize-all --randomize-suites --fail-on-pending ./tests/unit/... ./internal/infra/nats/... ./internal/infra/postgres/uow/... ./internal/infra/postgres/repository/... ./cmd/backfill
 
 unit-cover:
 	@go test ./tests/unit/... -coverpkg ./internal/... --tags=unit
