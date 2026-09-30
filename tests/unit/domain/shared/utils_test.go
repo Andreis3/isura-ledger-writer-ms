@@ -10,10 +10,22 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-var _ = It("uses the value when present and fallback otherwise", func() {
-	fallback := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	value := fallback.Add(time.Hour)
+var _ = Describe("INTERNAL :: DOMAIN :: SHARED :: UTILS", func() {
+	Describe("#CoalesceTime", func() {
+		Context("success cases", func() {
+			It("should return the value when present and the fallback when absent", func() {
+				// Arrange (Given)
+				fallback := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+				value := fallback.Add(time.Hour)
 
-	Expect(shared.CoalesceTime(value, fallback)).To(Equal(value))
-	Expect(shared.CoalesceTime(time.Time{}, fallback)).To(Equal(fallback))
+				// Act (When)
+				present := shared.CoalesceTime(value, fallback)
+				absent := shared.CoalesceTime(time.Time{}, fallback)
+
+				// Assert (Then)
+				Expect(present).To(Equal(value))
+				Expect(absent).To(Equal(fallback))
+			})
+		})
+	})
 })

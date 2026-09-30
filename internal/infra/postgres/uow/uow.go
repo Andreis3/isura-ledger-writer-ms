@@ -26,22 +26,28 @@ type UnitOfWork struct {
 	metrics application.Metrics
 }
 
-type retryPolicy struct {
-	maxAttempts int
-	baseDelay   time.Duration
-	maxDelay    time.Duration
-	jitter      func(time.Duration) time.Duration
-	wait        func(context.Context, time.Duration) error
+// RetryPolicy configures attempts, backoff, jitter, and waiting for retryable transactions.
+type RetryPolicy struct {
+	MaxAttempts int
+	BaseDelay   time.Duration
+	MaxDelay    time.Duration
+	Jitter      func(time.Duration) time.Duration
+	Wait        func(context.Context, time.Duration) error
 }
 
 func NewUnitOfWork(pool *pgxpool.Pool, metrics ...application.Metrics) *UnitOfWork {
+	return NewUnitOfWorkWithBegin(func(ctx context.Context) (pgx.Tx, error) {
+		return pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+	}, metrics...)
+}
+
+// NewUnitOfWorkWithBegin creates a unit of work using the supplied transaction starter.
+func NewUnitOfWorkWithBegin(begin func(context.Context) (pgx.Tx, error), metrics ...application.Metrics) *UnitOfWork {
 	var metric application.Metrics
 	if len(metrics) > 0 {
 		metric = metrics[0]
 	}
-	return &UnitOfWork{metrics: metric, begin: func(ctx context.Context) (pgx.Tx, error) {
-		return pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
-	}}
+	return &UnitOfWork{metrics: metric, begin: begin}
 }
 
 func (u *UnitOfWork) WithTransaction(ctx context.Context, fn func(ctx context.Context) error) error {
@@ -68,25 +74,26 @@ func (u *UnitOfWork) WithTransaction(ctx context.Context, fn func(ctx context.Co
 }
 
 func (u *UnitOfWork) WithRetryableTransaction(ctx context.Context, fn func(ctx context.Context) error) error {
-	policy := retryPolicy{
-		maxAttempts: 5,
-		baseDelay:   10 * time.Millisecond,
-		maxDelay:    200 * time.Millisecond,
-		jitter: func(limit time.Duration) time.Duration {
+	policy := RetryPolicy{
+		MaxAttempts: 5,
+		BaseDelay:   10 * time.Millisecond,
+		MaxDelay:    200 * time.Millisecond,
+		Jitter: func(limit time.Duration) time.Duration {
 			if limit <= 0 {
 				return 0
 			}
 			return time.Duration(rand.Int64N(int64(limit)))
 		},
-		wait: waitForRetry,
+		Wait: waitForRetry,
 	}
 
-	return retryTransactionWithPolicy(ctx, policy, func(ctx context.Context) error {
+	return RetryTransactionWithPolicy(ctx, policy, func(ctx context.Context) error {
 		return u.WithTransaction(ctx, fn)
 	}, u.metrics)
 }
 
-func retryTransaction(
+// RetryTransaction retries an operation when it fails with a supported concurrency conflict.
+func RetryTransaction(
 	ctx context.Context,
 	maxAttempts int,
 	operation func(context.Context) error,
@@ -94,23 +101,24 @@ func retryTransaction(
 	maxDelay time.Duration,
 	metrics ...application.Metrics,
 ) error {
-	return retryTransactionWithPolicy(ctx, retryPolicy{
-		maxAttempts: maxAttempts,
-		baseDelay:   baseDelay,
-		maxDelay:    maxDelay,
-		jitter: func(limit time.Duration) time.Duration {
+	return RetryTransactionWithPolicy(ctx, RetryPolicy{
+		MaxAttempts: maxAttempts,
+		BaseDelay:   baseDelay,
+		MaxDelay:    maxDelay,
+		Jitter: func(limit time.Duration) time.Duration {
 			if limit <= 0 {
 				return 0
 			}
 			return time.Duration(rand.Int64N(int64(limit)))
 		},
-		wait: waitForRetry,
+		Wait: waitForRetry,
 	}, operation, metrics...)
 }
 
-func retryTransactionWithPolicy(
+// RetryTransactionWithPolicy retries an operation according to policy.
+func RetryTransactionWithPolicy(
 	ctx context.Context,
-	policy retryPolicy,
+	policy RetryPolicy,
 	operation func(context.Context) error,
 	metrics ...application.Metrics,
 ) error {
@@ -118,32 +126,33 @@ func retryTransactionWithPolicy(
 	if len(metrics) > 0 {
 		metric = metrics[0]
 	}
-	for attempt := 0; attempt < policy.maxAttempts; attempt++ {
+	for attempt := 0; attempt < policy.MaxAttempts; attempt++ {
 		err := operation(ctx)
 		if err == nil {
 			return nil
 		}
 
-		if !isConcurrencyConflict(err) {
+		if !IsConcurrencyConflict(err) {
 			return err
 		}
 
-		if attempt == policy.maxAttempts-1 {
+		if attempt == policy.MaxAttempts-1 {
 			return fault.TransactionConflictError(errors.Join(err, ErrMaxRetriesExceeded))
 		}
 		if metric != nil {
 			metric.RecordConcurrencyRetry()
 		}
 
-		backoffLimit := retryBackoff(policy.baseDelay, policy.maxDelay, attempt)
-		if err := policy.wait(ctx, policy.jitter(backoffLimit)); err != nil {
+		backoffLimit := RetryBackoff(policy.BaseDelay, policy.MaxDelay, attempt)
+		if err := policy.Wait(ctx, policy.Jitter(backoffLimit)); err != nil {
 			return err
 		}
 	}
 	return fault.TransactionConflictError(ErrMaxRetriesExceeded)
 }
 
-func retryBackoff(baseDelay, maxDelay time.Duration, attempt int) time.Duration {
+// RetryBackoff returns the exponential backoff delay for an attempt, capped at maxDelay.
+func RetryBackoff(baseDelay, maxDelay time.Duration, attempt int) time.Duration {
 	if baseDelay <= 0 || maxDelay <= 0 {
 		return 0
 	}
@@ -172,7 +181,8 @@ func waitForRetry(ctx context.Context, duration time.Duration) error {
 	}
 }
 
-func isConcurrencyConflict(err error) bool {
+// IsConcurrencyConflict reports whether err is a supported PostgreSQL concurrency conflict.
+func IsConcurrencyConflict(err error) bool {
 	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok {
 		return pgErr.Code == "40001" ||
 			pgErr.Code == "40P01" ||

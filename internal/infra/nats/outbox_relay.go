@@ -62,7 +62,7 @@ func (r *OutboxRelay) Run(ctx context.Context) error {
 	defer ticker.Stop()
 
 	for {
-		if err := r.publishBatch(ctx); err != nil && ctx.Err() == nil {
+		if err := r.PublishBatch(ctx); err != nil && ctx.Err() == nil {
 			r.log.ErrorJSON("outbox relay batch failed", slog.String("error", err.Error()))
 		}
 		select {
@@ -73,7 +73,8 @@ func (r *OutboxRelay) Run(ctx context.Context) error {
 	}
 }
 
-func (r *OutboxRelay) publishBatch(ctx context.Context) error {
+// PublishBatch claims and publishes one batch of pending outbox records.
+func (r *OutboxRelay) PublishBatch(ctx context.Context) error {
 	items, err := r.repository.ClaimPending(ctx, r.config.BatchSize, r.config.MaxAttempts, r.config.RetryAfter)
 	if err != nil {
 		return fmt.Errorf("claim pending outbox: %w", err)

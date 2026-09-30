@@ -8,12 +8,23 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-var _ = It("builds a zero balance domain", func() {
-	accountID := "01936f7e-6f1d-7b13-9b5f-4c2e0b8c6d11"
-	result, err := (&dto.CreateBalanceInput{AccountID: accountID, Currency: "BRL"}).NewBalanceDomain()
+var _ = Describe("INTERNAL :: APPLICATION :: DTO :: BALANCE", func() {
+	Describe("#NewBalanceDomain", func() {
+		Context("success cases", func() {
+			It("should build a zero balance for the requested account", func() {
+				// Arrange (Given)
+				accountID := "01936f7e-6f1d-7b13-9b5f-4c2e0b8c6d11"
+				input := &dto.CreateBalanceInput{AccountID: accountID, Currency: "BRL"}
 
-	Expect(err).NotTo(HaveOccurred())
-	Expect(result.AccountID()).To(Equal(accountID))
-	Expect(result.Amount().Amount()).To(BeZero())
-	Expect(string(result.Amount().Currency())).To(Equal("BRL"))
+				// Act (When)
+				result, err := input.NewBalanceDomain()
+
+				// Assert (Then)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result.AccountID()).To(Equal(accountID))
+				Expect(result.Amount().Amount()).To(BeZero())
+				Expect(string(result.Amount().Currency())).To(Equal("BRL"))
+			})
+		})
+	})
 })

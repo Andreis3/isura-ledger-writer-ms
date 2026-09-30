@@ -9,41 +9,58 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-var _ = It("builds the account domain and masks sensitive fields", func() {
-	input := dto.CreateAccountInput{
-		AccountExternalID: uuid.NewString(),
-		AccountNumber:     "1234567890",
-		TaxID:             "52998224725",
-		AccountType:       "ASSET",
-		BalancePolicy:     "BALANCE_NON_NEGATIVE",
-		Currency:          "BRL",
-	}
+var _ = Describe("INTERNAL :: APPLICATION :: DTO :: ACCOUNT MASK", func() {
+	Describe("#CreateAccountFacade", func() {
+		Context("success cases", func() {
+			It("should build an account DTO and mask sensitive fields", func() {
+				// Arrange (Given)
+				input := dto.CreateAccountInput{
+					AccountExternalID: uuid.NewString(),
+					AccountNumber:     "1234567890",
+					TaxID:             "52998224725",
+					AccountType:       "ASSET",
+					BalancePolicy:     "BALANCE_NON_NEGATIVE",
+					Currency:          "BRL",
+				}
 
-	account, err := input.CreateAccountFacade()
-	Expect(err).NotTo(HaveOccurred())
-	Expect(account.AccountExternalID).To(Equal(input.AccountExternalID))
-	Expect(account.AccountNumber).To(Equal(input.AccountNumber))
-	Expect(string(account.Currency)).To(Equal(input.Currency))
-	Expect(string(account.BalancePolicy)).To(Equal(input.BalancePolicy))
+				// Act (When)
+				account, err := input.CreateAccountFacade()
 
-	Expect(dto.MaskTotal(input.AccountNumber)).To(Equal("**********"))
-	Expect(dto.MaskMiddleVisible("1234")).To(Equal("******"))
-	Expect(dto.MaskMiddleVisible("1234567")).To(Equal("**34***"))
-})
+				// Assert (Then)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(account.AccountExternalID).To(Equal(input.AccountExternalID))
+				Expect(account.AccountNumber).To(Equal(input.AccountNumber))
+				Expect(string(account.Currency)).To(Equal(input.Currency))
+				Expect(string(account.BalancePolicy)).To(Equal(input.BalancePolicy))
 
-var _ = It("rejects an absent or unknown balance policy", func() {
-	input := dto.CreateAccountInput{
-		AccountExternalID: uuid.NewString(),
-		AccountNumber:     "1234567890",
-		TaxID:             "52998224725",
-		AccountType:       "ASSET",
-		Currency:          "BRL",
-	}
+				Expect(dto.MaskTotal(input.AccountNumber)).To(Equal("**********"))
+				Expect(dto.MaskMiddleVisible("1234")).To(Equal("******"))
+				Expect(dto.MaskMiddleVisible("1234567")).To(Equal("**34***"))
+			})
+		})
 
-	_, err := input.CreateAccountFacade()
-	Expect(err).To(HaveOccurred())
+		Context("error cases", func() {
+			It("should reject an absent or unknown balance policy", func() {
+				// Arrange (Given)
+				input := dto.CreateAccountInput{
+					AccountExternalID: uuid.NewString(),
+					AccountNumber:     "1234567890",
+					TaxID:             "52998224725",
+					AccountType:       "ASSET",
+					Currency:          "BRL",
+				}
 
-	input.BalancePolicy = "BALANCE_UNKNOWN"
-	_, err = input.CreateAccountFacade()
-	Expect(err).To(HaveOccurred())
+				// Act (When)
+				_, err := input.CreateAccountFacade()
+				// Assert (Then)
+				Expect(err).To(HaveOccurred())
+
+				input.BalancePolicy = "BALANCE_UNKNOWN"
+				// Act (When)
+				_, err = input.CreateAccountFacade()
+				// Assert (Then)
+				Expect(err).To(HaveOccurred())
+			})
+		})
+	})
 })
