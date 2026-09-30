@@ -150,7 +150,7 @@ func (b *EntryBuilder) Build() (*Entry, error) {
 	}, nil
 }
 
-func (e *Entry) AddAccountID(accountID string) {
+func (e *Entry) AssignAccountID(accountID string) {
 	e.AccountID = accountID
 }
 
@@ -164,7 +164,7 @@ func (e *Entry) SetRunningBalance(balance int64) {
 	e.RunningBalance = balance
 }
 
-// AddTransactionID associates the entry with its immutable parent transaction.
-func (e *Entry) AddTransactionID(transactionID string) {
+// AssignTransactionID associates the entry with its immutable parent transaction.
+func (e *Entry) AssignTransactionID(transactionID string) {
 	e.TransactionID = transactionID
 }

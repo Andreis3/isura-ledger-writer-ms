@@ -87,7 +87,7 @@ func ToEntryDomain(model Entry) (*transaction.Entry, error) {
 	if err != nil {
 		return nil, err
 	}
-	entry.AddAccountID(model.AccountID.String)
+	entry.AssignAccountID(model.AccountID.String)
 	entry.SetSequenceNumber(model.SequenceNumber.Int64)
 	entry.SetRunningBalance(model.RunningBalance.Int64)
 	return entry, nil

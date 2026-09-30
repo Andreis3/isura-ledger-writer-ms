@@ -224,12 +224,12 @@ func validateAccounts(debit, credit *account.Account, currency money.Currency) e
 
 func assignEntryReferences(entityTransaction *transaction.Transaction, debit, credit *account.Account) {
 	for _, entry := range entityTransaction.Entries {
-		entry.AddTransactionID(entityTransaction.ID.String())
+		entry.AssignTransactionID(entityTransaction.ID.String())
 		if entry.Direction == transaction.Debit {
-			entry.AddAccountID(debit.ID.String())
+			entry.AssignAccountID(debit.ID.String())
 			continue
 		}
-		entry.AddAccountID(credit.ID.String())
+		entry.AssignAccountID(credit.ID.String())
 	}
 }
 

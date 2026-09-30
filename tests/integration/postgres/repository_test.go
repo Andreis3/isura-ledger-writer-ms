@@ -898,8 +898,8 @@ func newTransaction(accountA, accountB string) *transaction.Transaction {
 	gomega.Expect(err).NotTo(gomega.HaveOccurred())
 	credit, err := transaction.NewEntryBuilder().WithID(newIDV7()).WithAccountExternalID(uuid.NewString()).WithTransactionID(id).WithDirection(transaction.Credit).WithAmount(amount).Build()
 	gomega.Expect(err).NotTo(gomega.HaveOccurred())
-	debit.AddAccountID(accountA)
-	credit.AddAccountID(accountB)
+	debit.AssignAccountID(accountA)
+	credit.AssignAccountID(accountB)
 	entityTransaction, err := transaction.NewTransactionBuilder().WithID(id).WithIdempotencyKey(uuid.NewString()).WithFingerprint("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").WithStatus(transaction.Pending).WithAmount(amount).WithOperation(transaction.OperationTransfer).WithEntries([]*transaction.Entry{debit, credit}).Build()
 	gomega.Expect(err).NotTo(gomega.HaveOccurred())
 	return entityTransaction
