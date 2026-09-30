@@ -104,6 +104,115 @@ Expect(tx.Entries()[0].Direction()).To(Equal(domain.Debit))
 
 ## Estrutura dos testes
 
+### Convenção de organização dos testes unitários com Ginkgo
+
+Todo teste unitário deve seguir a hierarquia `Describe -> Describe -> Context -> It`.
+
+O primeiro `Describe` identifica o caminho do código de produção testado, em letras maiúsculas e separado por ` :: `. O nome deve representar o arquivo de produção, e não o caminho físico do arquivo de teste.
+
+Exemplos:
+
+```text
+internal/domain/account/account.go
+→ INTERNAL :: DOMAIN :: ACCOUNT :: ACCOUNT
+
+internal/domain/transaction/entry.go
+→ INTERNAL :: DOMAIN :: TRANSACTION :: ENTRY
+
+internal/application/command/create_transaction.go
+→ INTERNAL :: APPLICATION :: COMMAND :: CREATE TRANSACTION
+
+internal/infra/postgres/repository/transaction.go
+→ INTERNAL :: INFRA :: POSTGRES :: REPOSITORY :: TRANSACTION
+```
+
+O segundo `Describe` identifica o método, função ou construtor sendo testado e deve usar o nome real da API prefixado por `#`.
+
+Exemplos:
+
+```go
+Describe("#NewAccountBuilder", ...)
+Describe("#ApplyEntry", ...)
+Describe("#Complete", ...)
+Describe("#Execute", ...)
+Describe("#Save", ...)
+```
+
+Os cenários devem ser agrupados de forma padronizada em:
+
+```go
+Context("success cases", func() {
+    // caminhos de sucesso
+})
+
+Context("error cases", func() {
+    // caminhos de erro
+})
+```
+
+Use exatamente `success cases` e `error cases` quando essas categorias se aplicarem. Não alterne entre nomes equivalentes como `happy path`, `valid cases`, `failure cases` ou `invalid cases`.
+
+Cada `It` deve conter uma descrição breve em inglês iniciada por `should` e expressar o comportamento ou resultado observável esperado. Não descreva detalhes internos da implementação.
+
+Estrutura de referência:
+
+```go
+var _ = Describe("INTERNAL :: DOMAIN :: ACCOUNT :: ACCOUNT", func() {
+    Describe("#NewAccountBuilder", func() {
+        Context("success cases", func() {
+            It("should not return an error when building a new account", func() {
+                // Arrange
+
+                // Act
+
+                // Assert
+            })
+        })
+
+        Context("error cases", func() {
+            It("should return an error when external ID is empty", func() {
+                // Arrange
+
+                // Act
+
+                // Assert
+            })
+        })
+    })
+})
+```
+
+Quando o mesmo arquivo de produção possuir múltiplos comportamentos públicos testados, mantenha um único `Describe` externo e crie um `Describe` interno para cada método, função ou construtor:
+
+```go
+var _ = Describe("INTERNAL :: DOMAIN :: ACCOUNT :: ACCOUNT", func() {
+    Describe("#NewAccountBuilder", func() {
+        Context("success cases", func() {
+            // ...
+        })
+
+        Context("error cases", func() {
+            // ...
+        })
+    })
+
+    Describe("#ApplyEntry", func() {
+        Context("success cases", func() {
+            // ...
+        })
+
+        Context("error cases", func() {
+            // ...
+        })
+    })
+})
+```
+
+O `It` deve validar comportamento. Não crie testes apenas para verificar a existência ou o nome de métodos por reflection quando o próprio compilador já garante o contrato utilizado pelo código.
+
+Dentro de cada `It`, use GIVEN/WHEN/THEN ou AAA (Arrange/Act/Assert), deixando as três etapas identificáveis. Nomeie o teste pelo requisito observado.
+
+
 Use GIVEN/WHEN/THEN ou AAA (Arrange/Act/Assert), deixando as três etapas identificáveis. Nomeie o teste pelo requisito observado.
 
 ```go
