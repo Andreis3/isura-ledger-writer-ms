@@ -68,7 +68,8 @@ func (c *CreateTransaction) Execute(ctx context.Context, input dto.CreateTransac
 	var output *dto.CreateTransactionOutput
 	err = c.uow.WithRetryableTransaction(ctx, func(txCtx context.Context) error {
 		output = nil
-		// Rebuild the aggregate on every attempt so retries use fresh IDs and transaction state.
+		// Rebuild the aggregate on every attempt so retries discard transient
+		// state from the previous attempt and recalculate from fresh persisted state.
 		entityTransaction, err := input.CreateTransactionFacade()
 		if err != nil {
 			return err
