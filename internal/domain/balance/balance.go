@@ -1,9 +1,11 @@
 package balance
 
 import (
+	"errors"
 	"time"
 
 	"github.com/andreis3/isura-ledger-ms/internal/domain/entity"
+	"github.com/andreis3/isura-ledger-ms/internal/domain/fault"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/money"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/shared"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/validator"
@@ -92,6 +94,10 @@ func (b *BalanceBuilder) WithUpdatedAt(updatedAt ...time.Time) *BalanceBuilder {
 }
 
 func (b *BalanceBuilder) Build() (*Balance, error) {
+	if len(b.eval) > 0 {
+		return nil, fault.InvalidEntityError(errors.New("invalid balance entity"), b.eval)
+	}
+
 	now := time.Now()
 
 	return &Balance{
