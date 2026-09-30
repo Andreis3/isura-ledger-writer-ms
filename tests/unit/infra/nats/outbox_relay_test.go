@@ -6,82 +6,19 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
-	"github.com/andreis3/isura-ledger-ms/internal/application"
-	"github.com/andreis3/isura-ledger-ms/internal/domain/entity"
+	"github.com/nats-io/nats.go"
+
 	"github.com/andreis3/isura-ledger-ms/internal/domain/outbox"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/configs"
-	"github.com/andreis3/isura-ledger-ms/internal/infra/logger"
 	relayNATS "github.com/andreis3/isura-ledger-ms/internal/infra/nats"
-	"github.com/nats-io/nats.go"
+	adaptermocks "github.com/andreis3/isura-ledger-ms/tests/mocks/infra/adapter"
+	repositorymocks "github.com/andreis3/isura-ledger-ms/tests/mocks/infra/repository"
 	"github.com/nats-io/nats.go/jetstream"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/stretchr/testify/mock"
 )
-
-type relayRepository struct {
-	items      []*outbox.Outbox
-	update     outbox.UpdateOutboxData
-	claimCalls int
-}
-
-func (r *relayRepository) Save(context.Context, *outbox.Outbox) error { return nil }
-func (r *relayRepository) ClaimPending(context.Context, int, int, time.Duration) ([]*outbox.Outbox, error) {
-	r.claimCalls++
-	return r.items, nil
-}
-func (r *relayRepository) FindAll(context.Context, outbox.StatusOutbox, int) ([]*outbox.Outbox, error) {
-	return nil, nil
-}
-func (r *relayRepository) UpdateOutboxData(_ context.Context, _ entity.ID, data outbox.UpdateOutboxData) error {
-	r.update = data
-	return nil
-}
-
-type relayJetStream struct {
-	msg       *nats.Msg
-	err       error
-	onPublish func(context.Context)
-	calls     int
-}
-
-func (j *relayJetStream) PublishMsg(ctx context.Context, msg *nats.Msg, _ ...jetstream.PublishOpt) (*jetstream.PubAck, error) {
-	j.msg = msg
-	j.calls++
-	if j.onPublish != nil {
-		j.onPublish(ctx)
-	}
-	return nil, j.err
-}
-
-type relayTracer struct{}
-
-func (relayTracer) Start(ctx context.Context, _ string) (context.Context, application.Span) {
-	return ctx, relaySpan{}
-}
-
-type relaySpan struct{}
-
-func (relaySpan) End()                                 {}
-func (relaySpan) SpanContext() application.SpanContext { return relaySpanContext{} }
-func (relaySpan) RecordError(error)                    {}
-
-type relaySpanContext struct{}
-
-func (relaySpanContext) TraceID() string { return "relay-test" }
-
-type relayMetrics struct{}
-
-func (relayMetrics) RecordRequestTotal(string, string, int)                {}
-func (relayMetrics) RecordDBQueryDuration(string, string, string, float64) {}
-func (relayMetrics) RecordRequestDuration(string, string, int, float64)    {}
-func (relayMetrics) RecordTransactionTotal(string)                         {}
-func (relayMetrics) RecordCommandTotal(string, string)                     {}
-func (relayMetrics) RecordCommandDuration(string, float64)                 {}
-func (relayMetrics) RecordIdempotencyTotal(string)                         {}
-func (relayMetrics) RecordConcurrencyRetry()                               {}
-func (relayMetrics) RecordOutboxTotal(string, string)                      {}
 
 var _ = Describe("INTERNAL :: INFRA :: NATS :: OUTBOX RELAY", func() {
 	Describe("#PublishBatch", func() {
@@ -91,8 +28,13 @@ var _ = Describe("INTERNAL :: INFRA :: NATS :: OUTBOX RELAY", func() {
 				item, err := outbox.NewOutbox("transaction-id", []byte(`{"transaction_id":"transaction-id"}`))
 				Expect(err).NotTo(HaveOccurred())
 				item.Attempts = 1
-				repo := &relayRepository{items: []*outbox.Outbox{item}}
-				js := &relayJetStream{}
+				repo := new(repositorymocks.OutboxRepositoryMock)
+				repo.On("ClaimPending", mock.Anything, 10, 3, mock.Anything).Return([]*outbox.Outbox{item}, nil).Once()
+				repo.On("UpdateOutboxData", mock.Anything, item.ID, mock.MatchedBy(func(data outbox.UpdateOutboxData) bool {
+					return data.Status == outbox.Success && data.Attempts == item.Attempts && data.PublishedAt != nil
+				})).Return(nil).Once()
+				js := new(adaptermocks.JetStreamMock)
+				js.On("PublishMsg", mock.Anything, mock.Anything, mock.Anything).Return((*jetstream.PubAck)(nil), nil).Once()
 				relay := newRelayForTest(repo, js, 3)
 
 				// Act (When)
@@ -100,9 +42,10 @@ var _ = Describe("INTERNAL :: INFRA :: NATS :: OUTBOX RELAY", func() {
 
 				// Assert (Then)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(js.msg).NotTo(BeNil())
-				Expect(js.msg.Header.Get("Nats-Msg-Id")).To(Equal(item.ID.String()))
-				Expect(repo.update.Status).To(Equal(outbox.Success))
+				Expect(repo.AssertExpectations(GinkgoT())).To(BeTrue())
+				Expect(js.AssertExpectations(GinkgoT())).To(BeTrue())
+				published := js.Calls[0].Arguments.Get(1).(*nats.Msg)
+				Expect(published.Header.Get("Nats-Msg-Id")).To(Equal(item.ID.String()))
 			})
 		})
 
@@ -112,8 +55,14 @@ var _ = Describe("INTERNAL :: INFRA :: NATS :: OUTBOX RELAY", func() {
 				item, err := outbox.NewOutbox("transaction-id", []byte("payload"))
 				Expect(err).NotTo(HaveOccurred())
 				item.Attempts = 3
-				repo := &relayRepository{items: []*outbox.Outbox{item}}
-				js := &relayJetStream{err: errors.New("nats unavailable")}
+				repo := new(repositorymocks.OutboxRepositoryMock)
+				repo.On("ClaimPending", mock.Anything, 10, 3, mock.Anything).Return([]*outbox.Outbox{item}, nil).Once()
+				repo.On("UpdateOutboxData", mock.Anything, item.ID, mock.MatchedBy(func(data outbox.UpdateOutboxData) bool {
+					return data.Status == outbox.Failed && data.Attempts == item.Attempts
+				})).Return(nil).Once()
+				js := new(adaptermocks.JetStreamMock)
+				js.On("PublishMsg", mock.Anything, mock.Anything, mock.Anything).Return((*jetstream.PubAck)(nil), errors.New("nats unavailable")).Once()
+				js.On("PublishMsg", mock.Anything, mock.Anything, mock.Anything).Return((*jetstream.PubAck)(nil), nil).Once()
 				relay := newRelayForTest(repo, js, 3)
 
 				// Act (When)
@@ -121,9 +70,10 @@ var _ = Describe("INTERNAL :: INFRA :: NATS :: OUTBOX RELAY", func() {
 
 				// Assert (Then)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(js.msg).NotTo(BeNil())
-				Expect(js.msg.Subject).To(Equal(string(item.EventType) + ".dlq"))
-				Expect(repo.update.Status).To(Equal(outbox.Failed))
+				Expect(repo.AssertExpectations(GinkgoT())).To(BeTrue())
+				Expect(js.AssertExpectations(GinkgoT())).To(BeTrue())
+				dlq := js.Calls[1].Arguments.Get(1).(*nats.Msg)
+				Expect(dlq.Subject).To(Equal(string(item.EventType) + ".dlq"))
 			})
 		})
 	})
@@ -134,10 +84,15 @@ var _ = Describe("INTERNAL :: INFRA :: NATS :: OUTBOX RELAY", func() {
 				// Arrange (Given)
 				item, err := outbox.NewOutbox("transaction-id", []byte("payload"))
 				Expect(err).NotTo(HaveOccurred())
-				repo := &relayRepository{items: []*outbox.Outbox{item}}
+				repo := new(repositorymocks.OutboxRepositoryMock)
+				repo.On("ClaimPending", mock.Anything, 10, 3, mock.Anything).Return([]*outbox.Outbox{item}, nil).Once()
+				repo.On("UpdateOutboxData", mock.Anything, item.ID, mock.MatchedBy(func(data outbox.UpdateOutboxData) bool {
+					return data.Status == outbox.Success
+				})).Return(nil).Once()
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
-				js := &relayJetStream{onPublish: func(context.Context) { cancel() }}
+				js := new(adaptermocks.JetStreamMock)
+				js.On("PublishMsg", mock.Anything, mock.Anything, mock.Anything).Run(func(mock.Arguments) { cancel() }).Return((*jetstream.PubAck)(nil), nil).Once()
 				relay := newRelayForTest(repo, js, 3)
 
 				// Act (When)
@@ -145,16 +100,17 @@ var _ = Describe("INTERNAL :: INFRA :: NATS :: OUTBOX RELAY", func() {
 
 				// Assert (Then)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(repo.claimCalls).To(Equal(1))
-				Expect(js.calls).To(Equal(1))
-				Expect(repo.update.Status).To(Equal(outbox.Success))
+				Expect(repo.AssertNumberOfCalls(GinkgoT(), "ClaimPending", 1)).To(BeTrue())
+				Expect(repo.AssertExpectations(GinkgoT())).To(BeTrue())
+				Expect(js.AssertNumberOfCalls(GinkgoT(), "PublishMsg", 1)).To(BeTrue())
+				Expect(js.AssertExpectations(GinkgoT())).To(BeTrue())
 			})
 		})
 	})
 })
 
-func newRelayForTest(repo *relayRepository, js *relayJetStream, maxAttempts int) *relayNATS.OutboxRelay {
-	return relayNATS.NewOutboxRelay(repo, js, relayTracer{}, logger.NewLogger(), relayMetrics{}, configs.OutboxRelay{
+func newRelayForTest(repo *repositorymocks.OutboxRepositoryMock, js *adaptermocks.JetStreamMock, maxAttempts int) *relayNATS.OutboxRelay {
+	return relayNATS.NewOutboxRelay(repo, js, adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{}, configs.OutboxRelay{
 		BatchSize: 10, MaxWorkers: 1, MaxAttempts: maxAttempts,
 	})
 }
