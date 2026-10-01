@@ -1,0 +1,83 @@
+//go:build integration
+
+package postgres_test
+
+import (
+	"context"
+	"errors"
+	database "github.com/andreis3/isura-ledger-ms/internal/infra/postgres/database"
+	repository "github.com/andreis3/isura-ledger-ms/internal/infra/postgres/repository"
+	uow "github.com/andreis3/isura-ledger-ms/internal/infra/postgres/uow"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+)
+
+var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: UNIT OF WORK", func() {
+	Context("database behavior", func() {
+		It("should persist a balanced transaction and its outbox atomically", func() {
+			accountA, accountB := insertAccounts(ctx, tx)
+			entityTransaction := newTransaction(accountA, accountB)
+			transactionRepo := repository.NewTransactionRepository(pool)
+			outboxRepo := repository.NewOutBoxRepository(pool)
+			txContext := database.WithTx(ctx, tx)
+
+			Expect(transactionRepo.Save(txContext, entityTransaction)).To(Succeed())
+			Expect(outboxRepo.Save(txContext, newOutbox(entityTransaction.ID.String()))).To(Succeed())
+
+			var transactions, entries, outboxes int
+			transactionID := entityTransaction.ID.String()
+			Expect(tx.QueryRow(ctx, "SELECT count(*) FROM transactions WHERE id = $1", transactionID).Scan(&transactions)).To(Succeed())
+			Expect(tx.QueryRow(ctx, "SELECT count(*) FROM entries WHERE transaction_id = $1", transactionID).Scan(&entries)).To(Succeed())
+			Expect(tx.QueryRow(ctx, "SELECT count(*) FROM outbox_events WHERE aggregate_id = $1", transactionID).Scan(&outboxes)).To(Succeed())
+			Expect(transactions).To(Equal(1))
+			Expect(entries).To(Equal(2))
+			Expect(outboxes).To(Equal(1))
+		})
+		It("should commit or roll back transaction, entries, and outbox as one unit", func() {
+			accountA := insertAccount(ctx, pool)
+			accountB := insertAccount(ctx, pool)
+			transactionRepo := repository.NewTransactionRepository(pool)
+			outboxRepo := repository.NewOutBoxRepository(pool)
+			unitOfWork := uow.NewUnitOfWork(pool)
+
+			committed := newTransaction(accountA, accountB)
+			err := unitOfWork.WithTransaction(ctx, func(txCtx context.Context) error {
+				if err := transactionRepo.Save(txCtx, committed); err != nil {
+					return err
+				}
+				return outboxRepo.Save(txCtx, newOutbox(committed.ID.String()))
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			assertLedgerRecords(ctx, pool, committed.ID.String(), 1, 2, 1)
+
+			rolledBack := newTransaction(accountA, accountB)
+			expectedFailure := errors.New("force atomic rollback")
+			err = unitOfWork.WithTransaction(ctx, func(txCtx context.Context) error {
+				if err := transactionRepo.Save(txCtx, rolledBack); err != nil {
+					return err
+				}
+				if err := outboxRepo.Save(txCtx, newOutbox(rolledBack.ID.String())); err != nil {
+					return err
+				}
+				return expectedFailure
+			})
+			Expect(err).To(MatchError(expectedFailure))
+
+			assertLedgerRecords(ctx, pool, rolledBack.ID.String(), 0, 0, 0)
+		})
+		It("should roll back transaction, entries and outbox together", func() {
+			accountA, accountB := insertAccounts(ctx, tx)
+			entityTransaction := newTransaction(accountA, accountB)
+			txContext := database.WithTx(ctx, tx)
+			Expect(repository.NewTransactionRepository(pool).Save(txContext, entityTransaction)).To(Succeed())
+			Expect(repository.NewOutBoxRepository(pool).Save(txContext, newOutbox(entityTransaction.ID.String()))).To(Succeed())
+			Expect(tx.Rollback(ctx)).To(Succeed())
+
+			var count int
+			Expect(pool.QueryRow(ctx, "SELECT count(*) FROM transactions WHERE id = $1", entityTransaction.ID.String()).Scan(&count)).To(Succeed())
+			Expect(count).To(Equal(0))
+			tx = nopTx{}
+		})
+	})
+})

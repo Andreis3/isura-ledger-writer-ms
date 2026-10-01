@@ -1,24 +1,28 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"net/http"
 
 	"github.com/andreis3/isura-ledger-ms/internal/application"
-	"github.com/andreis3/isura-ledger-ms/internal/application/command"
 	"github.com/andreis3/isura-ledger-ms/internal/application/dto"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/fault"
 	"github.com/andreis3/isura-ledger-ms/internal/transport/rest/decoder"
 )
 
 type CreateTransactionHandler struct {
-	useCase *command.CreateTransaction
+	useCase createTransactionUseCase
 	log     application.Logger
 	tracer  application.Tracer
 }
 
+type createTransactionUseCase interface {
+	Execute(context.Context, dto.CreateTransactionInput) (*dto.CreateTransactionOutput, error)
+}
+
 func NewCreateTransactionHandler(
-	useCase *command.CreateTransaction,
+	useCase createTransactionUseCase,
 	log application.Logger,
 	tracer application.Tracer,
 ) *CreateTransactionHandler {

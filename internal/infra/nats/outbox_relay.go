@@ -11,14 +11,14 @@ import (
 	"github.com/andreis3/isura-ledger-ms/internal/domain/event"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/outbox"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/configs"
-	"github.com/andreis3/isura-ledger-ms/internal/infra/logger"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 )
 
-type outboxJetStream interface {
+// JetStreamPublisher publishes messages through a JetStream context.
+type JetStreamPublisher interface {
 	PublishMsg(context.Context, *nats.Msg, ...jetstream.PublishOpt) (*jetstream.PubAck, error)
 }
 
@@ -27,15 +27,15 @@ type outboxJetStream interface {
 // leaves a retryable FAILED record instead of holding a database lock.
 type OutboxRelay struct {
 	repository outbox.Repository
-	jetstream  outboxJetStream
+	jetstream  JetStreamPublisher
 	tracer     application.Tracer
-	log        *logger.Logger
+	log        application.Logger
 	metrics    application.Metrics
 	config     configs.OutboxRelay
 	workers    int
 }
 
-func NewOutboxRelay(repository outbox.Repository, js outboxJetStream, tracer application.Tracer, log *logger.Logger, metrics application.Metrics, config configs.OutboxRelay) *OutboxRelay {
+func NewOutboxRelay(repository outbox.Repository, js JetStreamPublisher, tracer application.Tracer, log application.Logger, metrics application.Metrics, config configs.OutboxRelay) *OutboxRelay {
 	if config.BatchSize <= 0 {
 		config.BatchSize = 100
 	}
@@ -62,7 +62,7 @@ func (r *OutboxRelay) Run(ctx context.Context) error {
 	defer ticker.Stop()
 
 	for {
-		if err := r.publishBatch(ctx); err != nil && ctx.Err() == nil {
+		if err := r.PublishBatch(ctx); err != nil && ctx.Err() == nil {
 			r.log.ErrorJSON("outbox relay batch failed", slog.String("error", err.Error()))
 		}
 		select {
@@ -73,7 +73,8 @@ func (r *OutboxRelay) Run(ctx context.Context) error {
 	}
 }
 
-func (r *OutboxRelay) publishBatch(ctx context.Context) error {
+// PublishBatch claims and publishes one batch of pending outbox records.
+func (r *OutboxRelay) PublishBatch(ctx context.Context) error {
 	items, err := r.repository.ClaimPending(ctx, r.config.BatchSize, r.config.MaxAttempts, r.config.RetryAfter)
 	if err != nil {
 		return fmt.Errorf("claim pending outbox: %w", err)

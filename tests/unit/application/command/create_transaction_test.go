@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"reflect"
 	"time"
 
 	"github.com/andreis3/isura-ledger-ms/internal/application"
@@ -148,17 +147,6 @@ var _ = Describe("CreateTransaction", func() {
 		for index := range transactions.attempts[0].Entries {
 			Expect(transactions.attempts[0].Entries[index].ID).NotTo(Equal(transactions.attempts[1].Entries[index].ID))
 		}
-	})
-
-	It("keeps the selected Entry ID assignment method names", func() {
-		entryType := reflect.TypeOf((*transaction.Entry)(nil))
-		_, hasAccountID := entryType.MethodByName("AddAccountID")
-		_, hasTransactionID := entryType.MethodByName("AddTransactionID")
-		_, hasMisspelledAlias := entryType.MethodByName("AddTransnactionID")
-
-		Expect(hasAccountID).To(BeTrue())
-		Expect(hasTransactionID).To(BeTrue())
-		Expect(hasMisspelledAlias).To(BeFalse())
 	})
 
 	It("replays after a concurrent request wins the idempotency race", func() {

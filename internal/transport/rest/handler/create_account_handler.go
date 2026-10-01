@@ -1,22 +1,26 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/andreis3/isura-ledger-ms/internal/application"
-	"github.com/andreis3/isura-ledger-ms/internal/application/command"
 	"github.com/andreis3/isura-ledger-ms/internal/application/dto"
 	"github.com/andreis3/isura-ledger-ms/internal/transport/rest/decoder"
 )
 
 type CreateAccountHandler struct {
-	useCase *command.CreateAccount
+	useCase createAccountUseCase
 	log     application.Logger
 	tracer  application.Tracer
 }
 
+type createAccountUseCase interface {
+	Execute(context.Context, dto.CreateAccountInput) (*dto.CreateAccountOutput, error)
+}
+
 func NewCreateAccountHandler(
-	useCase *command.CreateAccount,
+	useCase createAccountUseCase,
 	log application.Logger,
 	tracer application.Tracer,
 ) *CreateAccountHandler {

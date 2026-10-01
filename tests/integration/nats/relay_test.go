@@ -5,123 +5,116 @@ package nats_test
 import (
 	"context"
 	"fmt"
-	"testing"
 	"time"
 
-	"github.com/andreis3/isura-ledger-ms/internal/application"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/entity"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/outbox"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/configs"
-	"github.com/andreis3/isura-ledger-ms/internal/infra/logger"
 	ledgernats "github.com/andreis3/isura-ledger-ms/internal/infra/nats"
+	adaptermocks "github.com/andreis3/isura-ledger-ms/tests/mocks/infra/adapter"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 const relaySubject = "ledger.transaction.created"
 
-func TestOutboxRelayJetStreamIntegration(t *testing.T) {
-	ctx := context.Background()
-	container, js, closeJetStream := startJetStream(t, ctx)
-	defer closeJetStream()
-	defer testcontainers.TerminateContainer(container)
+var _ = Describe("INTEGRATION :: INFRA :: NATS :: OUTBOX RELAY", func() {
+	Describe("#Run", func() {
+		Context("success cases", func() {
+			It("should publish an outbox event to JetStream and mark it successful", func() {
+				// Arrange (Given)
+				ctx := context.Background()
+				container, js, closeJetStream, err := startJetStream(ctx)
+				Expect(err).NotTo(HaveOccurred())
+				DeferCleanup(func() {
+					Expect(testcontainers.TerminateContainer(container)).To(Succeed())
+				})
+				DeferCleanup(closeJetStream)
 
-	t.Run("publishes and marks outbox successful", func(t *testing.T) {
-		item, err := outbox.NewOutbox("transaction-id", []byte(`{"transaction_id":"transaction-id"}`))
-		if err != nil {
-			t.Fatal(err)
-		}
-		repository := &integrationRepository{items: []*outbox.Outbox{item}}
-		relay := ledgernats.NewOutboxRelay(repository, js, integrationTracer{}, logger.NewLogger(), integrationMetrics{}, configs.OutboxRelay{
-			BatchSize: 1, MaxWorkers: 1, MaxAttempts: 3,
+				item, err := outbox.NewOutbox("transaction-id", []byte(`{"transaction_id":"transaction-id"}`))
+				Expect(err).NotTo(HaveOccurred())
+				repo := &integrationRepository{items: []*outbox.Outbox{item}, updatedCh: make(chan outbox.UpdateOutboxData, 1)}
+				relay := newIntegrationRelay(repo, js)
+				runCtx, cancel := context.WithCancel(ctx)
+				DeferCleanup(cancel)
+
+				// Act (When)
+				done := make(chan error, 1)
+				go func() { done <- relay.Run(runCtx) }()
+				select {
+				case update := <-repo.updatedCh:
+					Expect(update.Status).To(Equal(outbox.Success))
+					cancel()
+				case <-time.After(5 * time.Second):
+					cancel()
+					Fail("timed out waiting for relay publication")
+				}
+				runErr := <-done
+
+				// Assert (Then)
+				Expect(runErr).NotTo(HaveOccurred())
+				consumer, err := js.CreateOrUpdateConsumer(ctx, relayStreamName(), jetstream.ConsumerConfig{
+					FilterSubject: relaySubject,
+					AckPolicy:     jetstream.AckExplicitPolicy,
+				})
+				Expect(err).NotTo(HaveOccurred())
+				message, err := consumer.Next(jetstream.FetchMaxWait(time.Second))
+				Expect(err).NotTo(HaveOccurred())
+				Expect(string(message.Data())).To(Equal(string(item.Payload)))
+				Expect(message.Ack()).To(Succeed())
+			})
 		})
-
-		runCtx, cancel := context.WithCancel(ctx)
-		repository.updatedCh = make(chan outbox.UpdateOutboxData, 1)
-		done := make(chan error, 1)
-		go func() { done <- relay.Run(runCtx) }()
-		select {
-		case <-repository.updatedCh:
-			cancel()
-		case <-time.After(5 * time.Second):
-			cancel()
-			t.Fatal("timed out waiting for relay publication")
-		}
-		if err := <-done; err != nil {
-			t.Fatal(err)
-		}
-		if repository.updated.Status != outbox.Success {
-			t.Fatalf("outbox status = %q, want %q", repository.updated.Status, outbox.Success)
-		}
-
-		consumer, err := js.CreateOrUpdateConsumer(ctx, "LEDGER_INTEGRATION", jetstream.ConsumerConfig{
-			FilterSubject: relaySubject,
-			AckPolicy:     jetstream.AckExplicitPolicy,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		message, err := consumer.Next(jetstream.FetchMaxWait(time.Second))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if string(message.Data()) != string(item.Payload) {
-			t.Fatalf("payload = %s, want %s", message.Data(), item.Payload)
-		}
-		if err := message.Ack(); err != nil {
-			t.Fatal(err)
-		}
 	})
 
-	t.Run("redelivers after nak without changing financial state", func(t *testing.T) {
-		_, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
-			Name:     "LEDGER_REDELIVERY",
-			Subjects: []string{"ledger.integration.redelivery"},
-			Storage:  jetstream.MemoryStorage,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		consumer, err := js.CreateOrUpdateConsumer(ctx, "LEDGER_REDELIVERY", jetstream.ConsumerConfig{
-			FilterSubject: "ledger.integration.redelivery",
-			AckPolicy:     jetstream.AckExplicitPolicy,
-			AckWait:       100 * time.Millisecond,
-			MaxDeliver:    2,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := js.Publish(ctx, "ledger.integration.redelivery", []byte(`{"event_id":"same-event"}`)); err != nil {
-			t.Fatal(err)
-		}
-		first, err := consumer.Next(jetstream.FetchMaxWait(time.Second))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := first.Nak(); err != nil {
-			t.Fatal(err)
-		}
-		second, err := consumer.Next(jetstream.FetchMaxWait(time.Second))
-		if err != nil {
-			t.Fatal(err)
-		}
-		metadata, err := second.Metadata()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if metadata.NumDelivered != 2 {
-			t.Fatalf("delivery count = %d, want 2", metadata.NumDelivered)
-		}
-		if err := second.Ack(); err != nil {
-			t.Fatal(err)
-		}
-	})
-}
+	Describe("JetStream consumer acknowledgements", func() {
+		Context("redelivery cases", func() {
+			It("should redeliver a message after NAK without changing its payload", func() {
+				// Arrange (Given)
+				ctx := context.Background()
+				container, js, closeJetStream, err := startJetStream(ctx)
+				Expect(err).NotTo(HaveOccurred())
+				DeferCleanup(func() {
+					Expect(testcontainers.TerminateContainer(container)).To(Succeed())
+				})
+				DeferCleanup(closeJetStream)
+				_, err = js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
+					Name: "LEDGER_REDELIVERY", Subjects: []string{"ledger.integration.redelivery"}, Storage: jetstream.MemoryStorage,
+				})
+				Expect(err).NotTo(HaveOccurred())
+				consumer, err := js.CreateOrUpdateConsumer(ctx, "LEDGER_REDELIVERY", jetstream.ConsumerConfig{
+					FilterSubject: "ledger.integration.redelivery",
+					AckPolicy:     jetstream.AckExplicitPolicy,
+					AckWait:       100 * time.Millisecond,
+					MaxDeliver:    2,
+				})
+				Expect(err).NotTo(HaveOccurred())
+				payload := []byte(`{"event_id":"same-event"}`)
+				_, err = js.Publish(ctx, "ledger.integration.redelivery", payload)
+				Expect(err).NotTo(HaveOccurred())
 
-func startJetStream(t *testing.T, ctx context.Context) (testcontainers.Container, jetstream.JetStream, func()) {
-	t.Helper()
+				// Act (When)
+				first, err := consumer.Next(jetstream.FetchMaxWait(time.Second))
+				Expect(err).NotTo(HaveOccurred())
+				Expect(first.Nak()).To(Succeed())
+				second, err := consumer.Next(jetstream.FetchMaxWait(time.Second))
+				Expect(err).NotTo(HaveOccurred())
+				metadata, err := second.Metadata()
+				Expect(err).NotTo(HaveOccurred())
+
+				// Assert (Then)
+				Expect(string(second.Data())).To(Equal(string(payload)))
+				Expect(metadata.NumDelivered).To(Equal(uint64(2)))
+				Expect(second.Ack()).To(Succeed())
+			})
+		})
+	})
+})
+
+func startJetStream(ctx context.Context) (testcontainers.Container, jetstream.JetStream, func(), error) {
 	container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
 			Image:        "nats:2.10-alpine",
@@ -132,35 +125,46 @@ func startJetStream(t *testing.T, ctx context.Context) (testcontainers.Container
 		Started: true,
 	})
 	if err != nil {
-		t.Fatal(err)
+		return nil, nil, nil, fmt.Errorf("start NATS container: %w", err)
 	}
 	host, err := container.Host(ctx)
 	if err != nil {
-		t.Fatal(err)
+		_ = testcontainers.TerminateContainer(container)
+		return nil, nil, nil, fmt.Errorf("get NATS container host: %w", err)
 	}
 	port, err := container.MappedPort(ctx, "4222/tcp")
 	if err != nil {
-		t.Fatal(err)
+		_ = testcontainers.TerminateContainer(container)
+		return nil, nil, nil, fmt.Errorf("get NATS mapped port: %w", err)
 	}
 	connection, err := nats.Connect(fmt.Sprintf("nats://%s:%s", host, port.Port()))
 	if err != nil {
-		t.Fatal(err)
+		_ = testcontainers.TerminateContainer(container)
+		return nil, nil, nil, fmt.Errorf("connect to NATS container: %w", err)
 	}
 	js, err := jetstream.New(connection)
 	if err != nil {
 		connection.Close()
-		t.Fatal(err)
+		_ = testcontainers.TerminateContainer(container)
+		return nil, nil, nil, fmt.Errorf("create JetStream context: %w", err)
 	}
 	if _, err := js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
 		Name: relayStreamName(), Subjects: []string{relaySubject}, Storage: jetstream.MemoryStorage,
 	}); err != nil {
 		connection.Close()
-		t.Fatal(err)
+		_ = testcontainers.TerminateContainer(container)
+		return nil, nil, nil, fmt.Errorf("create JetStream stream: %w", err)
 	}
-	return container, js, connection.Close
+	return container, js, connection.Close, nil
 }
 
 func relayStreamName() string { return "LEDGER_INTEGRATION" }
+
+func newIntegrationRelay(repo *integrationRepository, js jetstream.JetStream) *ledgernats.OutboxRelay {
+	return ledgernats.NewOutboxRelay(repo, js, adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{}, configs.OutboxRelay{
+		BatchSize: 1, MaxWorkers: 1, MaxAttempts: 3,
+	})
+}
 
 type integrationRepository struct {
 	items     []*outbox.Outbox
@@ -183,30 +187,4 @@ func (r *integrationRepository) UpdateOutboxData(_ context.Context, _ entity.ID,
 	return nil
 }
 
-type integrationTracer struct{}
-
-func (integrationTracer) Start(ctx context.Context, _ string) (context.Context, application.Span) {
-	return ctx, integrationSpan{}
-}
-
-type integrationSpan struct{}
-
-func (integrationSpan) End()                                 {}
-func (integrationSpan) SpanContext() application.SpanContext { return integrationSpanContext{} }
-func (integrationSpan) RecordError(error)                    {}
-
-type integrationSpanContext struct{}
-
-func (integrationSpanContext) TraceID() string { return "integration-trace" }
-
-type integrationMetrics struct{}
-
-func (integrationMetrics) RecordRequestTotal(string, string, int)                {}
-func (integrationMetrics) RecordDBQueryDuration(string, string, string, float64) {}
-func (integrationMetrics) RecordRequestDuration(string, string, int, float64)    {}
-func (integrationMetrics) RecordTransactionTotal(string)                         {}
-func (integrationMetrics) RecordCommandTotal(string, string)                     {}
-func (integrationMetrics) RecordCommandDuration(string, float64)                 {}
-func (integrationMetrics) RecordIdempotencyTotal(string)                         {}
-func (integrationMetrics) RecordConcurrencyRetry()                               {}
-func (integrationMetrics) RecordOutboxTotal(string, string)                      {}
+var _ outbox.Repository = (*integrationRepository)(nil)
