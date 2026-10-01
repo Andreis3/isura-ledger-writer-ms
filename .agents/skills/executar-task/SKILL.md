@@ -20,5 +20,11 @@ Uma tarefa é uma **entrega incremental**, com dependências explícitas e teste
 3. **Implementar** — implemente cada subtarefa na ordem; ao final, execute as validações e os testes da tarefa usando os comandos definidos no `AGENTS.md` e nas rules aplicáveis.
    **Conclua quando:** toda subtarefa estiver implementada e as validações e os testes aplicáveis da tarefa passarem.
 
-4. **Concluir e limpar** — marque como concluídas (`[x]`) todas as subtarefas e os testes aplicáveis no arquivo `task_[num].md`. Depois, marque a tarefa como concluída (`[x]`) no `tasks.md`, informe, em uma linha, o que foi implementado e desligue todos os serviços iniciados por esta execução. Encerre os processos de forma graciosa, confirme que as portas foram liberadas e não encerre processos pertencentes a outra worktree ou ao usuário. Faça essa limpeza também se a execução for interrompida ou bloqueada.
+4. **Explicar** — explicar o que foi implementado dando contexto técnicos das decisões tomadas e pergunte se ficou dúvidas
+   **conclua quando:** o desenvolvedor não tiver mais dúvidas
+
+5. **Revisão** — peça uma revisão do desenvolvedor para saber se eles de acordo o que foi implementado, caso o desenvolvedor peça ajustes então deve realizar os ajustes solicitados.
+   **Conclua quando:** o desenvolvedor estiver de acordo com o que foi implementado
+
+6. **Concluir e limpar** — marque como concluídas (`[x]`) todas as subtarefas e os testes aplicáveis no arquivo `task_[num].md`. Depois, marque a tarefa como concluída (`[x]`) no `tasks.md`, informe, em uma linha, o que foi implementado e desligue todos os serviços iniciados por esta execução. Encerre os processos de forma graciosa, confirme que as portas foram liberadas e não encerre processos pertencentes a outra worktree ou ao usuário. Faça essa limpeza também se a execução for interrompida ou bloqueada.
    **Conclua quando:** todas as subtarefas e os testes aplicáveis estiverem marcados no arquivo da tarefa, e a tarefa estiver marcada como concluída no `tasks.md`.
