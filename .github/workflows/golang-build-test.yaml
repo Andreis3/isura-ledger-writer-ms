@@ -30,6 +30,9 @@ jobs:
       - name: Install Ginkgo
         run: go install -mod=mod github.com/onsi/ginkgo/v2/ginkgo
 
+      - name: Install Atlas
+        uses: ariga/setup-atlas@v0
+
       - name: Test Unit Cover
         run: make unit-cover
       - name: Test Integration
