@@ -32,3 +32,5 @@ jobs:
 
       - name: Test Unit Cover
         run: make unit-cover
+      - name: Test Integration
+        run: make integration-tests

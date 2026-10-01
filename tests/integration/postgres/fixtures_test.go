@@ -96,6 +96,14 @@ func insertAccount(ctx context.Context, pool *pgxpool.Pool) string {
 	return id
 }
 
+func insertAccountV7(ctx context.Context, tx pgx.Tx) string {
+	id := newIDV7()
+	now := time.Now()
+	_, err := tx.Exec(ctx, `INSERT INTO accounts (id, account_external_id, account_number, tax_id, status, type, balance_policy, currency, created_at, updated_at) VALUES ($1, $2, $3, $4, 'ACTIVE', 'ASSET', 'BALANCE_UNRESTRICTED', 'BRL', $5, $5)`, id, uuid.NewString(), uuid.NewString(), "12345678901234", now)
+	Expect(err).NotTo(HaveOccurred())
+	return id
+}
+
 func insertAccountsForCommand(ctx context.Context, pool *pgxpool.Pool) (string, string) {
 	ids := []string{uuid.NewString(), uuid.NewString()}
 	for index, externalID := range ids {
