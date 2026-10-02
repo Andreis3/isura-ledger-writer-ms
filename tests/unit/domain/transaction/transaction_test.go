@@ -16,6 +16,45 @@ import (
 )
 
 var _ = Describe("INTERNAL :: DOMAIN :: TRANSACTION :: TRANSACTION", func() {
+	Describe("#Build", func() {
+		Context("error cases", func() {
+			It("should return an invalid transfer error when debit and credit entries use the same account", func() {
+				amount, err := money.NewMoney(100, money.BRL)
+				Expect(err).NotTo(HaveOccurred())
+
+				const accountExternalID = "e4e5e6e7-e8e9-410e-a11e-e12e13e14e15"
+				credit, err := transaction.NewEntryBuilder().
+					WithID().
+					WithAccountExternalID(accountExternalID).
+					WithDirection(transaction.Credit).
+					WithAmount(amount).
+					Build()
+				Expect(err).NotTo(HaveOccurred())
+				debit, err := transaction.NewEntryBuilder().
+					WithID().
+					WithAccountExternalID(accountExternalID).
+					WithDirection(transaction.Debit).
+					WithAmount(amount).
+					Build()
+				Expect(err).NotTo(HaveOccurred())
+
+				_, err = transaction.NewTransactionBuilder().
+					WithID().
+					WithIdempotencyKey("same-account-transfer").
+					WithAmount(amount).
+					WithOperation(transaction.OperationTransfer).
+					WithEntries([]*transaction.Entry{credit, debit}).
+					Build()
+
+				var domainErr *fault.DomainError
+				Expect(errors.As(err, &domainErr)).To(BeTrue())
+				Expect(domainErr.Code).To(Equal(fault.CodeInvalidTransfer))
+				Expect(domainErr.FriendlyMessage).To(Equal("Debit and credit accounts must be different."))
+				Expect(errors.Is(err, transaction.ErrSameAccountTransfer)).To(BeTrue())
+			})
+		})
+	})
+
 	Describe("WithCreatedAt validation", func() {
 		It("reports created_at for a future entry creation date", func() {
 			amount, err := money.NewMoney(100, money.BRL)

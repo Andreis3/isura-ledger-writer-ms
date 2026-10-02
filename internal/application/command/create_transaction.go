@@ -95,6 +95,9 @@ func (c *CreateTransaction) Execute(ctx context.Context, input dto.CreateTransac
 		if err := validateAccounts(debitAccount, creditAccount, entityTransaction.Amount.Currency()); err != nil {
 			return err
 		}
+		if debitAccount.ID == creditAccount.ID {
+			return fault.InvalidTransferError(transaction.ErrSameAccountTransfer)
+		}
 
 		assignEntryReferences(entityTransaction, debitAccount, creditAccount)
 		if err := entityTransaction.Complete(); err != nil {

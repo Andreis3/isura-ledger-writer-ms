@@ -15,6 +15,7 @@ import (
 	"github.com/andreis3/isura-ledger-ms/internal/application/dto"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/account"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/entity"
+	"github.com/andreis3/isura-ledger-ms/internal/domain/fault"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/money"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/outbox"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/transaction"
@@ -187,6 +188,36 @@ var _ = Describe("CreateTransaction", func() {
 		Expect(err).To(MatchError(ContainSubstring("idempotency fingerprint mismatch")))
 		Expect(transactions.saved).To(BeNil())
 		Expect(metrics.idempotencyCounts).To(Equal(map[string]int{"conflict": 1}))
+	})
+})
+
+var _ = Describe("INTERNAL :: APPLICATION :: COMMAND :: CREATE TRANSACTION", func() {
+	Describe("#Execute", func() {
+		Context("error cases", func() {
+			It("should reject different external IDs that resolve to the same account without persisting", func() {
+				input := validInput()
+				accounts := newAccountRepository()
+				accounts.accounts[creditExternalID].ID = accounts.accounts[debitExternalID].ID
+				transactions := &transactionRepository{}
+				outboxes := &outboxRepository{}
+				sut := newCommand(accounts, transactions, outboxes, &unitOfWork{})
+
+				for range 2 {
+					result, err := sut.Execute(context.Background(), input)
+
+					Expect(result).To(BeNil())
+					var domainErr *fault.DomainError
+					Expect(errors.As(err, &domainErr)).To(BeTrue())
+					Expect(domainErr.Code).To(Equal(fault.CodeInvalidTransfer))
+				}
+
+				Expect(transactions.findCalls).To(Equal(2))
+				Expect(transactions.saveCalls).To(BeZero())
+				Expect(transactions.saved).To(BeNil())
+				Expect(outboxes.saved).To(BeNil())
+				Expect(accounts.findCalls).To(HaveLen(4))
+			})
+		})
 	})
 })
 

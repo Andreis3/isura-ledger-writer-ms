@@ -189,8 +189,8 @@ func IdempotencyConflictError(err error) *DomainError {
 // InvalidTransferError reports a violation of the transfer double-entry invariant.
 func InvalidTransferError(err error) *DomainError {
 	return &DomainError{
-		Code:            CodeInvalidEntity,
-		FriendlyMessage: "The transfer must contain one debit and one credit entry.",
+		Code:            CodeInvalidTransfer,
+		FriendlyMessage: "Debit and credit accounts must be different.",
 		Cause:           err,
 		Origin:          CallerName(2),
 	}
