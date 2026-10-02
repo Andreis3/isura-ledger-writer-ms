@@ -109,7 +109,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/TransactionResponse'
         '400':
-          description: Erro de validação (ex. Débitos e Créditos não batem)
+          description: >
+            Erro de validação. Transferências em que débito e crédito apontam para a mesma conta
+            retornam o código ILMS-1006 e a mensagem "Debit and credit accounts must be different.".
           content:
             application/json:
               schema:

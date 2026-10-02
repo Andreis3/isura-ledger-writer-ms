@@ -113,4 +113,30 @@ var _ = Describe("CreateTransactionInput", func() {
 			Expect(err).To(HaveOccurred())
 		}
 	})
+
+})
+
+var _ = Describe("INTERNAL :: APPLICATION :: DTO :: CREATE TRANSACTION", func() {
+	Describe("#CreateTransactionFacade", func() {
+		Context("error cases", func() {
+			It("should return an invalid transfer error when debit and credit account IDs match", func() {
+				accountID := "d290f1ee-6c54-4b01-90e6-d701748f0851"
+				input := dto.CreateTransactionInput{
+					IdempotencyKey:  stringPointer("same-account-transfer"),
+					DebitAccountID:  stringPointer(accountID),
+					CreditAccountID: stringPointer(accountID),
+					Amount:          intPointer(100),
+					Currency:        stringPointer("BRL"),
+					Operation:       stringPointer("TRANSFER"),
+				}
+
+				entity, err := input.CreateTransactionFacade()
+
+				Expect(entity).To(BeNil())
+				var domainErr *fault.DomainError
+				Expect(errors.As(err, &domainErr)).To(BeTrue())
+				Expect(domainErr.Code).To(Equal(fault.CodeInvalidTransfer))
+			})
+		})
+	})
 })

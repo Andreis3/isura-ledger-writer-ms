@@ -18,6 +18,7 @@ var (
 	ErrInvalidDifferentAmount   = errors.New("different amount")
 	ErrTransactionNotFound      = errors.New("transaction not found")
 	ErrInvalidTransfer          = errors.New("transfer must contain distinct debit and credit entries")
+	ErrSameAccountTransfer      = errors.New("debit and credit accounts must be different")
 )
 
 type StateMachineStatus map[TransactionStatus][]TransactionStatus
@@ -229,7 +230,9 @@ func (b *TransactionBuilder) WithMetadata(metadata map[string]string) *Transacti
 // Build builds the transaction
 func (b *TransactionBuilder) Build() (*Transaction, error) {
 	if b.operation == OperationTransfer {
-		b.validateTransferEntries()
+		if err := b.validateTransferEntries(); err != nil {
+			return nil, err
+		}
 	}
 	if len(b.eval) > 0 {
 		return nil, fault.InvalidEntityError(errors.New("invalid transaction entity"), b.eval)
@@ -251,14 +254,14 @@ func (b *TransactionBuilder) Build() (*Transaction, error) {
 	}, nil
 }
 
-func (b *TransactionBuilder) validateTransferEntries() {
+func (b *TransactionBuilder) validateTransferEntries() error {
 	if len(b.entries) != 2 {
 		b.eval.CheckField(false, "entries", ErrInvalidTransfer.Error())
-		return
+		return nil
 	}
 	first, second := b.entries[0], b.entries[1]
 	if first.AccountExternalID == second.AccountExternalID {
-		b.eval.CheckField(false, "entries", "debit and credit accounts must be different")
+		return fault.InvalidTransferError(ErrSameAccountTransfer)
 	}
 	if first.Direction == second.Direction || !first.Direction.IsValid() || !second.Direction.IsValid() {
 		b.eval.CheckField(false, "entries", "entries must contain one debit and one credit")
@@ -266,6 +269,7 @@ func (b *TransactionBuilder) validateTransferEntries() {
 	if !first.Amount.Equal(second.Amount) {
 		b.eval.CheckField(false, "entries", ErrInvalidDifferentAmount.Error())
 	}
+	return nil
 }
 
 func cloneMetadata(metadata map[string]string) map[string]string {

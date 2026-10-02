@@ -20,11 +20,34 @@ Uma tarefa é uma **entrega incremental**, com dependências explícitas e teste
 3. **Implementar** — implemente cada subtarefa na ordem; ao final, execute as validações e os testes da tarefa usando os comandos definidos no `AGENTS.md` e nas rules aplicáveis.
    **Conclua quando:** toda subtarefa estiver implementada e as validações e os testes aplicáveis da tarefa passarem.
 
-4. **Explicar** — explicar o que foi implementado dando contexto técnicos das decisões tomadas e pergunte se ficou dúvidas
-   **conclua quando:** o desenvolvedor não tiver mais dúvidas
+4. **Explicar** — apresente ao desenvolvedor o que foi implementado e o raciocínio técnico por trás das principais decisões. Explique de forma didática, como para um desenvolvedor júnior que conhece a linguagem, mas ainda não domina o contexto do projeto.
 
-5. **Revisão** — peça uma revisão do desenvolvedor para saber se eles de acordo o que foi implementado, caso o desenvolvedor peça ajustes então deve realizar os ajustes solicitados.
-   **Conclua quando:** o desenvolvedor estiver de acordo com o que foi implementado
+   A explicação deve cobrir, quando aplicável:
+   - qual problema foi resolvido;
+   - como a solução funciona;
+   - quais arquivos e componentes foram alterados;
+   - por que as principais decisões técnicas foram tomadas;
+   - quais regras de domínio, arquitetura ou infraestrutura influenciaram a implementação;
+   - quais testes foram adicionados ou alterados e o que eles garantem;
+   - trade-offs, limitações ou pontos de atenção relevantes.
+
+   Responda às dúvidas do desenvolvedor antes de avançar.
+
+   **Conclua quando:** a implementação e suas principais decisões técnicas tiverem sido explicadas e o desenvolvedor não solicitar esclarecimentos adicionais.
+
+5. **Revisão** — solicite explicitamente que o desenvolvedor revise a implementação antes de considerar a tarefa concluída.
+
+   Durante a revisão:
+   - aguarde a manifestação do desenvolvedor;
+   - se forem solicitados ajustes, analise-os e implemente os que forem compatíveis com os requisitos da tarefa;
+   - após cada alteração, execute novamente as validações aplicáveis;
+   - explique resumidamente o que mudou;
+   - solicite uma nova revisão;
+   - repita o ciclo enquanto houver ajustes solicitados.
+
+   Não considere silêncio, ausência de resposta ou conclusão das validações automáticas como aprovação.
+
+   **Conclua quando:** o desenvolvedor aprovar explicitamente a implementação ou declarar que não há mais ajustes necessários.
 
 6. **Concluir e limpar** — marque como concluídas (`[x]`) todas as subtarefas e os testes aplicáveis no arquivo `task_[num].md`. Depois, marque a tarefa como concluída (`[x]`) no `tasks.md`, informe, em uma linha, o que foi implementado e desligue todos os serviços iniciados por esta execução. Encerre os processos de forma graciosa, confirme que as portas foram liberadas e não encerre processos pertencentes a outra worktree ou ao usuário. Faça essa limpeza também se a execução for interrompida ou bloqueada.
    **Conclua quando:** todas as subtarefas e os testes aplicáveis estiverem marcados no arquivo da tarefa, e a tarefa estiver marcada como concluída no `tasks.md`.
