@@ -24,6 +24,11 @@ const (
 	Debit  Direction = "DEBIT"
 )
 
+// String returns the textual representation of the direction.
+func (d Direction) String() string {
+	return string(d)
+}
+
 func (d Direction) IsValid() bool {
 	switch d {
 	case Credit, Debit:
