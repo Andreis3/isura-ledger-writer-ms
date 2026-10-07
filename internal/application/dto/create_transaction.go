@@ -16,12 +16,22 @@ import (
 
 type CreateTransactionInput struct {
 	IdempotencyKey  *string           `json:"idempotency_key"`
+	Entries         []EntryInput      `json:"entries,omitempty"`
 	DebitAccountID  *string           `json:"debit_account_id"`
 	CreditAccountID *string           `json:"credit_account_id"`
 	Operation       *string           `json:"operation"`
 	Amount          *int64            `json:"amount"`
 	Currency        *string           `json:"currency"`
 	Metadata        map[string]string `json:"metadata,omitempty"`
+}
+
+// EntryInput is one ordered accounting posting requested by a client.
+type EntryInput struct {
+	AccountID string            `json:"account_id"`
+	Direction string            `json:"direction"`
+	Amount    int64             `json:"amount"`
+	Currency  string            `json:"currency"`
+	Metadata  map[string]string `json:"metadata,omitempty"`
 }
 
 type CreateTransactionOutput struct {
@@ -42,19 +52,27 @@ type canonicalMetadataEntry struct {
 	Value string `json:"value"`
 }
 
-type canonicalTransactionInput struct {
-	DebitAccountID  string                   `json:"debit_account_id"`
-	CreditAccountID string                   `json:"credit_account_id"`
-	Amount          int64                    `json:"amount"`
-	Currency        string                   `json:"currency"`
-	Operation       string                   `json:"operation"`
-	Metadata        []canonicalMetadataEntry `json:"metadata"`
+type canonicalEntryInput struct {
+	AccountID string                   `json:"account_id"`
+	Direction string                   `json:"direction"`
+	Amount    int64                    `json:"amount"`
+	Currency  string                   `json:"currency"`
+	Metadata  []canonicalMetadataEntry `json:"metadata"`
+}
+
+type canonicalEntriesTransactionInput struct {
+	Entries   []canonicalEntryInput    `json:"entries"`
+	Operation string                   `json:"operation"`
+	Metadata  []canonicalMetadataEntry `json:"metadata"`
 }
 
 // Fingerprint returns the SHA-256 of the canonical business intent.
 // IdempotencyKey is intentionally excluded from the digest.
 func (d CreateTransactionInput) Fingerprint() (string, error) {
 	if err := d.validateMetadata(); err != nil {
+		return "", err
+	}
+	if err := d.validateFormat(); err != nil {
 		return "", err
 	}
 
@@ -68,20 +86,65 @@ func (d CreateTransactionInput) Fingerprint() (string, error) {
 		metadata = append(metadata, canonicalMetadataEntry{Key: key, Value: d.Metadata[key]})
 	}
 
-	canonical := canonicalTransactionInput{
-		DebitAccountID:  util.String(d.DebitAccountID),
-		CreditAccountID: util.String(d.CreditAccountID),
-		Amount:          util.Int64(d.Amount),
-		Currency:        util.String(d.Currency),
-		Operation:       util.String(d.Operation),
-		Metadata:        metadata,
+	requestedEntries := d.normalizedEntries()
+	entries := make([]canonicalEntryInput, 0, len(requestedEntries))
+	for _, entry := range requestedEntries {
+		entryMetadataValues := entry.Metadata
+		if entryMetadataValues == nil {
+			entryMetadataValues = d.Metadata
+		}
+		entryMetadata, err := canonicalMetadata(entryMetadataValues)
+		if err != nil {
+			return "", err
+		}
+		entries = append(entries, canonicalEntryInput{
+			AccountID: entry.AccountID,
+			Direction: entry.Direction,
+			Amount:    entry.Amount,
+			Currency:  entry.Currency,
+			Metadata:  entryMetadata,
+		})
 	}
+	canonical := canonicalEntriesTransactionInput{Entries: entries, Operation: util.String(d.Operation), Metadata: metadata}
 	raw, err := json.Marshal(canonical)
 	if err != nil {
 		return "", errors.New("failed to encode transaction fingerprint")
 	}
 	digest := sha256.Sum256(raw)
 	return hex.EncodeToString(digest[:]), nil
+}
+
+func (d CreateTransactionInput) validateFormat() error {
+	if d.Entries == nil {
+		return nil
+	}
+	if d.DebitAccountID != nil || d.CreditAccountID != nil || d.Amount != nil || d.Currency != nil {
+		return fault.InvalidEntityError(errors.New("entries cannot be combined with legacy transaction fields"), map[string]any{
+			"entries": "cannot be combined with legacy fields",
+		})
+	}
+	if len(d.Entries) == 0 {
+		return fault.InvalidEntityError(errors.New("entries must not be empty"), map[string]any{
+			"entries": "must contain at least two entries",
+		})
+	}
+	return nil
+}
+
+func canonicalMetadata(values map[string]string) ([]canonicalMetadataEntry, error) {
+	if err := (CreateTransactionInput{Metadata: values}).validateMetadata(); err != nil {
+		return nil, err
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	result := make([]canonicalMetadataEntry, 0, len(keys))
+	for _, key := range keys {
+		result = append(result, canonicalMetadataEntry{Key: key, Value: values[key]})
+	}
+	return result, nil
 }
 
 func (d CreateTransactionInput) validateMetadata() error {
@@ -114,41 +177,36 @@ func (d *CreateTransactionInput) CreateTransactionFacade() (*transaction.Transac
 			"idempotency_key": "cannot exceed 50 characters",
 		})
 	}
+	if err := d.validateFormat(); err != nil {
+		return nil, err
+	}
 	fingerprint, err := d.Fingerprint()
 	if err != nil {
 		return nil, err
 	}
-	amount, err := money.NewMoney(util.Int64(d.Amount), money.Currency(util.String(d.Currency)))
-	if err != nil {
-		return nil, err
+	requestedEntries := d.normalizedEntries()
+	entries := make([]*transaction.Entry, 0, len(requestedEntries))
+	for _, requested := range requestedEntries {
+		amount, err := money.NewMoney(requested.Amount, money.Currency(requested.Currency))
+		if err != nil {
+			return nil, err
+		}
+		metadata := requested.Metadata
+		if metadata == nil {
+			metadata = d.Metadata
+		}
+		entry, err := transaction.NewEntryBuilder().WithID().
+			WithAccountExternalID(requested.AccountID).
+			WithAmount(amount).
+			WithDirection(transaction.Direction(requested.Direction)).
+			WithMetadata(metadata).
+			WithCreatedAt().Build()
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, entry)
 	}
-
-	entryDestination, err := transaction.NewEntryBuilder().
-		WithID().
-		WithAccountExternalID(util.String(d.CreditAccountID)).
-		WithAmount(amount).
-		WithDirection(transaction.Credit).
-		WithMetadata(d.Metadata).
-		WithCreatedAt().
-		Build()
-
-	if err != nil {
-		return nil, err
-	}
-
-	entrySource, err := transaction.NewEntryBuilder().
-		WithID().
-		WithAccountExternalID(util.String(d.DebitAccountID)).
-		WithAmount(amount).
-		WithDirection(transaction.Debit).
-		WithMetadata(d.Metadata).
-		WithCreatedAt().
-		Build()
-	if err != nil {
-		return nil, err
-	}
-
-	entries := []*transaction.Entry{entryDestination, entrySource}
+	amount := entries[0].Amount
 
 	return transaction.NewTransactionBuilder().
 		WithID().
@@ -162,6 +220,16 @@ func (d *CreateTransactionInput) CreateTransactionFacade() (*transaction.Transac
 		WithCreatedAt().
 		WithUpdatedAt().
 		Build()
+}
+
+func (d CreateTransactionInput) normalizedEntries() []EntryInput {
+	if d.Entries != nil {
+		return append([]EntryInput(nil), d.Entries...)
+	}
+	return []EntryInput{
+		{AccountID: util.String(d.CreditAccountID), Direction: transaction.Credit.String(), Amount: util.Int64(d.Amount), Currency: util.String(d.Currency), Metadata: d.Metadata},
+		{AccountID: util.String(d.DebitAccountID), Direction: transaction.Debit.String(), Amount: util.Int64(d.Amount), Currency: util.String(d.Currency), Metadata: d.Metadata},
+	}
 }
 
 // LogValue implements slog.LogValuer to safely log transaction input without exposing raw sensitive data.
