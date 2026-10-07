@@ -17,8 +17,9 @@ var (
 	ErrInvalidTransactionStatus = errors.New("invalid transaction status")
 	ErrInvalidDifferentAmount   = errors.New("different amount")
 	ErrTransactionNotFound      = errors.New("transaction not found")
-	ErrInvalidTransfer          = errors.New("transfer must contain distinct debit and credit entries")
+	ErrInvalidTransfer          = errors.New("transfer must contain debit and credit entries")
 	ErrSameAccountTransfer      = errors.New("debit and credit accounts must be different")
+	ErrUnbalancedEntries        = errors.New("entries must balance by currency")
 )
 
 type StateMachineStatus map[TransactionStatus][]TransactionStatus
@@ -156,24 +157,73 @@ func (b *TransactionBuilder) WithEntries(entries []*Entry) *TransactionBuilder {
 	if len(entries) == 0 {
 		return b
 	}
-
-	if len(entries) > 2 {
-		b.eval.CheckField(false, "entries", "maximum entries exceeded")
-		return b
-	}
-
-	if len(entries) == 2 {
-		if entries[0].Direction == entries[1].Direction {
-			b.eval.CheckField(false, "entries", "duplicate entry direction: entries must have opposite directions (debit and credit)")
-		}
-
-		if !entries[0].Amount.Equal(entries[1].Amount) {
-			b.eval.CheckField(false, "entries", "different amount")
-		}
-	}
-
-	b.entries = entries
+	b.entries = append([]*Entry(nil), entries...)
+	b.validateEntries()
 	return b
+}
+
+func (b *TransactionBuilder) validateEntries() {
+	if len(b.entries) < 2 {
+		b.eval.CheckField(false, "entries", "must contain at least two entries")
+		return
+	}
+
+	totals := make(map[money.Currency]entryTotals)
+	for _, entry := range b.entries {
+		if entry == nil {
+			b.eval.CheckField(false, "entries", "entry cannot be nil")
+			continue
+		}
+		if !entry.Direction.IsValid() {
+			b.eval.CheckField(false, "entries", "invalid direction")
+		}
+		if !entry.Amount.IsPositive() {
+			b.eval.CheckField(false, "entries", "amount must be positive")
+		}
+		if !entry.Amount.Currency().IsValid() {
+			b.eval.CheckField(false, "entries", "invalid currency")
+		}
+		b.eval.CheckField(validator.MatchesUUID(entry.AccountExternalID), "entries", "invalid account")
+
+		currency := entry.Amount.Currency()
+		current := totals[currency]
+		amount := entry.Amount.Amount()
+		if amount > 0 && current.debits > int64(^uint64(0)>>1)-amount && entry.Direction == Debit {
+			b.eval.CheckField(false, "entries", "debit total overflows")
+			continue
+		}
+		if amount > 0 && current.credits > int64(^uint64(0)>>1)-amount && entry.Direction == Credit {
+			b.eval.CheckField(false, "entries", "credit total overflows")
+			continue
+		}
+		if entry.Direction == Debit {
+			current.debits += amount
+			current.hasDebit = true
+		}
+		if entry.Direction == Credit {
+			current.credits += amount
+			current.hasCredit = true
+		}
+		totals[currency] = current
+	}
+
+	for _, total := range totals {
+		if !total.hasDebit || !total.hasCredit {
+			b.eval.CheckField(false, "entries", "entries must contain at least one debit and one credit")
+			return
+		}
+		if total.debits != total.credits {
+			b.eval.CheckField(false, "entries", ErrUnbalancedEntries.Error())
+			return
+		}
+	}
+}
+
+type entryTotals struct {
+	debits    int64
+	credits   int64
+	hasDebit  bool
+	hasCredit bool
 }
 
 // WithCreatedAt sets the creation time
@@ -229,10 +279,8 @@ func (b *TransactionBuilder) WithMetadata(metadata map[string]string) *Transacti
 
 // Build builds the transaction
 func (b *TransactionBuilder) Build() (*Transaction, error) {
-	if b.operation == OperationTransfer {
-		if err := b.validateTransferEntries(); err != nil {
-			return nil, err
-		}
+	if b.operation == OperationTransfer && len(b.entries) == 0 {
+		b.eval.CheckField(false, "entries", ErrInvalidTransfer.Error())
 	}
 	if len(b.eval) > 0 {
 		return nil, fault.InvalidEntityError(errors.New("invalid transaction entity"), b.eval)
@@ -252,24 +300,6 @@ func (b *TransactionBuilder) Build() (*Transaction, error) {
 		Fingerprint:    b.fingerprint,
 		Metadata:       cloneMetadata(b.metadata),
 	}, nil
-}
-
-func (b *TransactionBuilder) validateTransferEntries() error {
-	if len(b.entries) != 2 {
-		b.eval.CheckField(false, "entries", ErrInvalidTransfer.Error())
-		return nil
-	}
-	first, second := b.entries[0], b.entries[1]
-	if first.AccountExternalID == second.AccountExternalID {
-		return fault.InvalidTransferError(ErrSameAccountTransfer)
-	}
-	if first.Direction == second.Direction || !first.Direction.IsValid() || !second.Direction.IsValid() {
-		b.eval.CheckField(false, "entries", "entries must contain one debit and one credit")
-	}
-	if !first.Amount.Equal(second.Amount) {
-		b.eval.CheckField(false, "entries", ErrInvalidDifferentAmount.Error())
-	}
-	return nil
 }
 
 func cloneMetadata(metadata map[string]string) map[string]string {

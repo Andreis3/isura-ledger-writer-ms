@@ -17,8 +17,8 @@ import (
 
 var _ = Describe("INTERNAL :: DOMAIN :: TRANSACTION :: TRANSACTION", func() {
 	Describe("#Build", func() {
-		Context("error cases", func() {
-			It("should return an invalid transfer error when debit and credit entries use the same account", func() {
+		Context("success cases", func() {
+			It("should allow debit and credit entries for the same account", func() {
 				amount, err := money.NewMoney(100, money.BRL)
 				Expect(err).NotTo(HaveOccurred())
 
@@ -38,7 +38,7 @@ var _ = Describe("INTERNAL :: DOMAIN :: TRANSACTION :: TRANSACTION", func() {
 					Build()
 				Expect(err).NotTo(HaveOccurred())
 
-				_, err = transaction.NewTransactionBuilder().
+				built, err := transaction.NewTransactionBuilder().
 					WithID().
 					WithIdempotencyKey("same-account-transfer").
 					WithAmount(amount).
@@ -46,11 +46,8 @@ var _ = Describe("INTERNAL :: DOMAIN :: TRANSACTION :: TRANSACTION", func() {
 					WithEntries([]*transaction.Entry{credit, debit}).
 					Build()
 
-				var domainErr *fault.DomainError
-				Expect(errors.As(err, &domainErr)).To(BeTrue())
-				Expect(domainErr.Code).To(Equal(fault.CodeInvalidTransfer))
-				Expect(domainErr.FriendlyMessage).To(Equal("Debit and credit accounts must be different."))
-				Expect(errors.Is(err, transaction.ErrSameAccountTransfer)).To(BeTrue())
+				Expect(err).NotTo(HaveOccurred())
+				Expect(built.Entries).To(HaveLen(2))
 			})
 		})
 	})
@@ -117,7 +114,33 @@ var _ = Describe("INTERNAL :: DOMAIN :: TRANSACTION :: TRANSACTION", func() {
 
 	Describe("#WithEntries", func() {
 		Context("success cases", func() {
-			It("should not return an error when add new entry", func() {
+			It("should balance each currency independently and preserve repeated account order", func() {
+				brl, err := money.NewMoney(100, money.BRL)
+				Expect(err).NotTo(HaveOccurred())
+				usd, err := money.NewMoney(200, money.USD)
+				Expect(err).NotTo(HaveOccurred())
+				entries := []*transaction.Entry{
+					buildEntry(transaction.Debit, transferDebitAccount, brl),
+					buildEntry(transaction.Credit, transferCreditAccount, brl),
+					buildEntry(transaction.Credit, transferDebitAccount, usd),
+					buildEntry(transaction.Debit, transferDebitAccount, usd),
+				}
+
+				built, err := transaction.NewTransactionBuilder().
+					WithID().
+					WithIdempotencyKey("multi-currency-entries").
+					WithAmount(brl).
+					WithOperation(transaction.OperationTransfer).
+					WithEntries(entries).
+					Build()
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(built.Entries).To(Equal(entries))
+			})
+		})
+
+		Context("error cases", func() {
+			It("should reject a transaction with a single entry", func() {
 				id, _ := entity.NewIDV7()
 				amount, _ := money.NewMoney(100, money.BRL)
 				entry, err := transaction.NewEntryBuilder().
@@ -137,15 +160,16 @@ var _ = Describe("INTERNAL :: DOMAIN :: TRANSACTION :: TRANSACTION", func() {
 					WithEntries([]*transaction.Entry{entry}).
 					Build()
 
-				Expect(err).To(BeNil())
-				Expect(trans.Entries).To(HaveLen(1))
+				Expect(err).To(HaveOccurred())
+				Expect(trans).To(BeNil())
 			})
 		})
 
-		Context("error cases", func() {
-			It("should return an error when add more than two entries", func() {
+		Context("success cases", func() {
+			It("should accept more than two balanced entries", func() {
 				id, _ := entity.NewIDV7()
 				amount, _ := money.NewMoney(100, money.BRL)
+				amount200, _ := money.NewMoney(200, money.BRL)
 				entry, err := transaction.NewEntryBuilder().
 					WithID().
 					WithTransactionID(id.String()).
@@ -158,7 +182,7 @@ var _ = Describe("INTERNAL :: DOMAIN :: TRANSACTION :: TRANSACTION", func() {
 					WithID().
 					WithTransactionID(id.String()).
 					WithAccountExternalID("f4f5f6f7-f8f9-410f-a11f-f12f13f14f15").
-					WithDirection(transaction.Debit).
+					WithDirection(transaction.Credit).
 					WithAmount(amount).
 					Build()
 				Expect(err).To(BeNil())
@@ -167,11 +191,11 @@ var _ = Describe("INTERNAL :: DOMAIN :: TRANSACTION :: TRANSACTION", func() {
 					WithTransactionID(id.String()).
 					WithAccountExternalID("a4a5a6a7-a8a9-410a-a11a-a12a13a14a15").
 					WithDirection(transaction.Debit).
-					WithAmount(amount).
+					WithAmount(amount200).
 					Build()
 				Expect(err).To(BeNil())
 
-				_, err = transaction.NewTransactionBuilder().
+				trans, err := transaction.NewTransactionBuilder().
 					WithID(id.String()).
 					WithIdempotencyKey("any_idempotency_key").
 					WithAmount(amount).
@@ -179,11 +203,11 @@ var _ = Describe("INTERNAL :: DOMAIN :: TRANSACTION :: TRANSACTION", func() {
 					WithEntries([]*transaction.Entry{entry, entry2, entry3}).
 					Build()
 
-				Expect(err).NotTo(BeNil())
-				Expect(err.Error()).To(ContainSubstring("maximum entries exceeded"))
+				Expect(err).NotTo(HaveOccurred())
+				Expect(trans.Entries).To(HaveLen(3))
 			})
 
-			It("should return an error when add two entries with same direction", func() {
+			It("should reject entries without both directions", func() {
 				id, _ := entity.NewIDV7()
 				amount, _ := money.NewMoney(100, money.BRL)
 				entry, err := transaction.NewEntryBuilder().
@@ -211,8 +235,8 @@ var _ = Describe("INTERNAL :: DOMAIN :: TRANSACTION :: TRANSACTION", func() {
 					WithEntries([]*transaction.Entry{entry, entry2}).
 					Build()
 
-				Expect(err).NotTo(BeNil())
-				Expect(err.Error()).To(ContainSubstring("duplicate entry direction"))
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("at least one debit and one credit"))
 			})
 
 			It("should return an error when add two entries with different amount", func() {
@@ -245,7 +269,7 @@ var _ = Describe("INTERNAL :: DOMAIN :: TRANSACTION :: TRANSACTION", func() {
 					Build()
 
 				Expect(err).NotTo(BeNil())
-				Expect(err.Error()).To(ContainSubstring("different amount"))
+				Expect(err.Error()).To(ContainSubstring("balance by currency"))
 			})
 		})
 	})
