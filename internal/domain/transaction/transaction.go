@@ -12,14 +12,16 @@ import (
 )
 
 var (
-	ErrInvalidMaxEntries        = errors.New("maximum entries exceeded")
-	ErrDuplicateEntryDirection  = errors.New("duplicate entry direction")
-	ErrInvalidTransactionStatus = errors.New("invalid transaction status")
-	ErrInvalidDifferentAmount   = errors.New("different amount")
-	ErrTransactionNotFound      = errors.New("transaction not found")
-	ErrInvalidTransfer          = errors.New("transfer must contain debit and credit entries")
-	ErrSameAccountTransfer      = errors.New("debit and credit accounts must be different")
-	ErrUnbalancedEntries        = errors.New("entries must balance by currency")
+	ErrInvalidMaxEntries         = errors.New("maximum entries exceeded")
+	ErrDuplicateEntryDirection   = errors.New("duplicate entry direction")
+	ErrInvalidTransactionStatus  = errors.New("invalid transaction status")
+	ErrInvalidDifferentAmount    = errors.New("different amount")
+	ErrTransactionNotFound       = errors.New("transaction not found")
+	ErrInvalidTransfer           = errors.New("transfer must contain debit and credit entries")
+	ErrSameAccountTransfer       = errors.New("debit and credit accounts must be different")
+	ErrUnbalancedEntries         = errors.New("entries must balance in the transaction currency")
+	ErrMixedEntryCurrencies      = errors.New("all entries in a transaction must use the same currency")
+	ErrTransactionAmountMismatch = errors.New("transaction amount must equal the debit and credit totals")
 )
 
 type StateMachineStatus map[TransactionStatus][]TransactionStatus
@@ -169,6 +171,8 @@ func (b *TransactionBuilder) validateEntries() {
 	}
 
 	totals := make(map[money.Currency]entryTotals)
+	var transactionCurrency money.Currency
+	hasTransactionCurrency := false
 	for _, entry := range b.entries {
 		if entry == nil {
 			b.eval.CheckField(false, "entries", "entry cannot be nil")
@@ -183,6 +187,12 @@ func (b *TransactionBuilder) validateEntries() {
 		if !entry.Amount.Currency().IsValid() {
 			b.eval.CheckField(false, "entries", "invalid currency")
 		}
+		if hasTransactionCurrency && entry.Amount.Currency() != transactionCurrency {
+			b.eval.CheckField(false, "entries", ErrMixedEntryCurrencies.Error())
+			return
+		}
+		transactionCurrency = entry.Amount.Currency()
+		hasTransactionCurrency = true
 		b.eval.CheckField(validator.MatchesUUID(entry.AccountExternalID), "entries", "invalid account")
 
 		currency := entry.Amount.Currency()
@@ -214,6 +224,10 @@ func (b *TransactionBuilder) validateEntries() {
 		}
 		if total.debits != total.credits {
 			b.eval.CheckField(false, "entries", ErrUnbalancedEntries.Error())
+			return
+		}
+		if transactionCurrency != b.amount.Currency() || total.debits != b.amount.Amount() {
+			b.eval.CheckField(false, "amount", ErrTransactionAmountMismatch.Error())
 			return
 		}
 	}

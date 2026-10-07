@@ -53,16 +53,17 @@ func NewEntryBuilder() *EntryBuilder {
 }
 
 type Entry struct {
-	ID                entity.ID
-	AccountID         string
-	AccountExternalID string
-	TransactionID     string
-	SequenceNumber    int64
-	RunningBalance    int64
-	Direction         Direction
-	Amount            money.Money
-	CreatedAt         time.Time
-	Metadata          map[string]string
+	ID                  entity.ID
+	AccountID           string
+	AccountExternalID   string
+	TransactionID       string
+	SequenceNumber      int64
+	TransactionPosition int64
+	RunningBalance      int64
+	Direction           Direction
+	Amount              money.Money
+	CreatedAt           time.Time
+	Metadata            map[string]string
 }
 
 func (b *EntryBuilder) WithID(id ...string) *EntryBuilder {
@@ -162,6 +163,11 @@ func (e *Entry) AssignAccountID(accountID string) {
 // SetSequenceNumber records the immutable sequence assigned by the ledger for this account.
 func (e *Entry) SetSequenceNumber(sequence int64) {
 	e.SequenceNumber = sequence
+}
+
+// SetTransactionPosition records the immutable position in the parent transaction.
+func (e *Entry) SetTransactionPosition(position int64) {
+	e.TransactionPosition = position
 }
 
 // SetRunningBalance records the balance after this entry is applied to its account.

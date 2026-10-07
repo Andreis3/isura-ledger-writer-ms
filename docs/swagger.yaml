@@ -238,11 +238,20 @@ components:
       type: object
       required:
         - idempotency_key
-        - debit_account_id
-        - credit_account_id
         - amount
-        - currency
         - operation
+      description: >
+        Envie o formato legado (debit_account_id, credit_account_id e currency) ou entries.
+        No formato entries, amount é obrigatório na raiz e deve ser igual à soma dos débitos
+        e à soma dos créditos. Todos os lançamentos devem usar a mesma moeda.
+      oneOf:
+        - required: [debit_account_id, credit_account_id, currency]
+        - required: [entries]
+          not:
+            anyOf:
+              - required: [debit_account_id]
+              - required: [credit_account_id]
+              - required: [currency]
       properties:
         idempotency_key:
           type: string
@@ -258,11 +267,39 @@ components:
           type: integer
           format: int64
           minimum: 1
-          description: Valor em centavos.
+          description: >
+            Valor em centavos. No formato entries, é o total da operação e deve coincidir com
+            a soma dos débitos e com a soma dos créditos.
           example: 150000
         currency:
           type: string
           enum: [BRL, USD, EUR]
+          description: Obrigatório somente no formato legado.
+        entries:
+          type: array
+          minItems: 2
+          description: Lançamentos ordenados; todos devem usar a mesma moeda.
+          items:
+            type: object
+            required: [account_id, direction, amount, currency]
+            properties:
+              account_id:
+                type: string
+                format: uuid
+              direction:
+                type: string
+                enum: [DEBIT, CREDIT]
+              amount:
+                type: integer
+                format: int64
+                minimum: 1
+              currency:
+                type: string
+                enum: [BRL, USD, EUR]
+              metadata:
+                type: object
+                additionalProperties:
+                  type: string
         operation:
           type: string
           enum: [TRANSFER]

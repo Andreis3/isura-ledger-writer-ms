@@ -19,7 +19,10 @@ import (
 	pgconn "github.com/jackc/pgx/v5/pgconn"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"os"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -58,6 +61,50 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: TRANSACTION REPOSITORY", f
 			Expect(err).NotTo(HaveOccurred())
 			Expect(byID.ID).To(Equal(original.ID))
 			Expect(byID.Entries).To(HaveLen(2))
+			Expect(byID.Entries[0].TransactionPosition).To(Equal(int64(0)))
+			Expect(byID.Entries[1].TransactionPosition).To(Equal(int64(1)))
+		})
+		It("should backfill historical transaction positions in deterministic account sequence order", func() {
+			// Arrange.
+			accountA, _ := insertAccounts(ctx, tx)
+			entityTransaction := newTransaction(accountA, accountA)
+			_, err := tx.Exec(ctx, "ALTER TABLE entries ALTER COLUMN transaction_position DROP NOT NULL")
+			Expect(err).NotTo(HaveOccurred())
+			_, err = tx.Exec(ctx, `
+				INSERT INTO transactions (id, idempotency_key, request_fingerprint, status, operation, amount, currency, created_at, updated_at)
+				VALUES ($1, $2, $3, 'PENDING', 'TRANSFER', 100, 'BRL', now(), now())`,
+				entityTransaction.ID.String(), entityTransaction.IdempotencyKey, entityTransaction.Fingerprint)
+			Expect(err).NotTo(HaveOccurred())
+			for position, entry := range entityTransaction.Entries {
+				_, err = tx.Exec(ctx, `
+					INSERT INTO entries (id, account_id, transaction_id, sequence_number, transaction_position, direction, amount, running_balance, currency, created_at)
+					VALUES ($1, $2, $3, $4, NULL, $5, $6, $7, 'BRL', now())`,
+					entry.ID.String(), accountA, entityTransaction.ID.String(), position+1,
+					entry.Direction.String(), entry.Amount.Amount(), 0)
+				Expect(err).NotTo(HaveOccurred())
+			}
+			_, sourceFile, _, ok := runtime.Caller(0)
+			Expect(ok).To(BeTrue())
+			backfillPath := filepath.Clean(filepath.Join(filepath.Dir(sourceFile), "../../../db/backfills/transaction_position.sql"))
+			backfill, err := os.ReadFile(backfillPath)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Act.
+			_, err = tx.Exec(ctx, string(backfill))
+
+			// Assert.
+			Expect(err).NotTo(HaveOccurred())
+			rows, err := tx.Query(ctx, `SELECT transaction_position FROM entries WHERE transaction_id = $1 ORDER BY sequence_number`, entityTransaction.ID.String())
+			Expect(err).NotTo(HaveOccurred())
+			defer rows.Close()
+			var positions []int64
+			for rows.Next() {
+				var position int64
+				Expect(rows.Scan(&position)).To(Succeed())
+				positions = append(positions, position)
+			}
+			Expect(rows.Err()).NotTo(HaveOccurred())
+			Expect(positions).To(Equal([]int64{0, 1}))
 		})
 		It("should serialize concurrent requests with the same idempotency key", func() {
 			debitExternalID, creditExternalID := insertAccountsForCommand(ctx, pool)
@@ -201,7 +248,7 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: TRANSACTION REPOSITORY", f
 		})
 		It("should enforce positive amounts and valid directions in the database", func() {
 			accountA, accountB := insertAccounts(ctx, tx)
-			_, err := tx.Exec(ctx, `INSERT INTO entries (id, account_id, transaction_id, sequence_number, direction, amount, running_balance, currency, created_at) VALUES ($1, $2, $3, 1, 'INVALID', 0, 0, 'BRL', $4)`, uuid.NewString(), accountA, uuid.NewString(), time.Now())
+			_, err := tx.Exec(ctx, `INSERT INTO entries (id, account_id, transaction_id, sequence_number, transaction_position, direction, amount, running_balance, currency, created_at) VALUES ($1, $2, $3, 1, 0, 'INVALID', 0, 0, 'BRL', $4)`, uuid.NewString(), accountA, uuid.NewString(), time.Now())
 			Expect(err).To(HaveOccurred())
 			_ = accountB
 		})
@@ -218,9 +265,9 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: TRANSACTION REPOSITORY", f
 
 			_, err := tx.Exec(ctx, `
 					INSERT INTO entries (
-						id, account_id, transaction_id, sequence_number, direction, amount,
+						id, account_id, transaction_id, sequence_number, transaction_position, direction, amount,
 						running_balance, currency, created_at
-					) VALUES ($1, $2, $3, 1, 'DEBIT', 1500, -1500, 'BRL', $4)
+					) VALUES ($1, $2, $3, 1, 2, 'DEBIT', 1500, -1500, 'BRL', $4)
 				`, uuid.NewString(), accountA, entityTransaction.ID.String(), time.Now())
 			var pgErr *pgconn.PgError
 			Expect(errors.As(err, &pgErr)).To(BeTrue())

@@ -140,6 +140,7 @@ var _ = Describe("INTERNAL :: APPLICATION :: DTO :: CREATE TRANSACTION", func() 
 				legacyFingerprint, err := input.Fingerprint()
 				Expect(err).NotTo(HaveOccurred())
 				explicitFingerprint, err := (dto.CreateTransactionInput{
+					Amount:    intPointer(150000),
 					Operation: stringPointer("TRANSFER"),
 					Entries: []dto.EntryInput{
 						{AccountID: "a290f1ee-6c54-4b01-90e6-d701748f0852", Direction: "CREDIT", Amount: 150000, Currency: "BRL"},
@@ -172,7 +173,7 @@ var _ = Describe("INTERNAL :: APPLICATION :: DTO :: CREATE TRANSACTION", func() 
 
 			It("should reject a request mixing entries and legacy fields", func() {
 				input := multiEntryInput()
-				input.Amount = intPointer(100)
+				input.DebitAccountID = stringPointer("d290f1ee-6c54-4b01-90e6-d701748f0851")
 				_, err := input.Fingerprint()
 				Expect(err).To(HaveOccurred())
 			})
@@ -194,6 +195,7 @@ var _ = Describe("INTERNAL :: APPLICATION :: DTO :: CREATE TRANSACTION", func() 
 					AccountID: "b290f1ee-6c54-4b01-90e6-d701748f0853", Direction: "CREDIT", Amount: 25, Currency: "BRL",
 				})
 				input.Entries[0].Amount = 125
+				input.Amount = intPointer(125)
 
 				entity, err := input.CreateTransactionFacade()
 
@@ -202,6 +204,21 @@ var _ = Describe("INTERNAL :: APPLICATION :: DTO :: CREATE TRANSACTION", func() 
 				Expect(entity.Entries[0].Direction).To(Equal(transaction.Debit))
 				Expect(entity.Entries[1].Direction).To(Equal(transaction.Credit))
 				Expect(entity.Entries[2].AccountExternalID).To(Equal(input.Entries[2].AccountID))
+				Expect(entity.Amount.Amount()).To(Equal(int64(125)))
+			})
+
+			It("should reject entries whose debit total differs from the root amount", func() {
+				// Arrange.
+				input := multiEntryInput()
+				input.Amount = intPointer(101)
+
+				// Act.
+				entity, err := input.CreateTransactionFacade()
+
+				// Assert.
+				Expect(entity).To(BeNil())
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring(transaction.ErrTransactionAmountMismatch.Error()))
 			})
 
 			It("should accept debit and credit entries for the same account", func() {
@@ -226,6 +243,7 @@ var _ = Describe("INTERNAL :: APPLICATION :: DTO :: CREATE TRANSACTION", func() 
 
 func multiEntryInput() dto.CreateTransactionInput {
 	return dto.CreateTransactionInput{
+		Amount:    intPointer(100),
 		Operation: stringPointer("TRANSFER"),
 		Entries: []dto.EntryInput{
 			{AccountID: "d290f1ee-6c54-4b01-90e6-d701748f0851", Direction: "DEBIT", Amount: 100, Currency: "BRL", Metadata: map[string]string{"leg": "source"}},

@@ -28,8 +28,8 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: LEDGER RECONCILIATION", fu
 				transactionID, uuid.NewString(), "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", now)
 			Expect(err).NotTo(HaveOccurred())
 			_, err = pool.Exec(ctx, `
-					INSERT INTO entries (id, account_id, transaction_id, sequence_number, direction, amount, running_balance, currency, created_at)
-					VALUES ($1, $2, $3, 1, 'DEBIT', 50, 50, 'BRL', $4)`, entryID, accountID, transactionID, now)
+					INSERT INTO entries (id, account_id, transaction_id, sequence_number, transaction_position, direction, amount, running_balance, currency, created_at)
+					VALUES ($1, $2, $3, 1, 0, 'DEBIT', 50, 50, 'BRL', $4)`, entryID, accountID, transactionID, now)
 			Expect(err).NotTo(HaveOccurred())
 			DeferCleanup(func() {
 				_, cleanupErr := pool.Exec(ctx, "DELETE FROM entries WHERE id = $1", entryID)
@@ -116,8 +116,8 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: LEDGER RECONCILIATION", fu
 			_, err = fixtureTx.Exec(ctx, "SET LOCAL session_replication_role = replica")
 			Expect(err).NotTo(HaveOccurred())
 			_, err = fixtureTx.Exec(ctx, `
-					INSERT INTO entries (id, account_id, transaction_id, sequence_number, direction, amount, running_balance, currency, created_at)
-					VALUES ($1, $2, $3, 1, 'DEBIT', 75, 75, 'BRL', $4)`, entryID, missingAccountID, transactionID, now)
+					INSERT INTO entries (id, account_id, transaction_id, sequence_number, transaction_position, direction, amount, running_balance, currency, created_at)
+					VALUES ($1, $2, $3, 1, 0, 'DEBIT', 75, 75, 'BRL', $4)`, entryID, missingAccountID, transactionID, now)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(fixtureTx.Commit(ctx)).To(Succeed())
 

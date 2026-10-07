@@ -114,22 +114,22 @@ var _ = Describe("INTERNAL :: DOMAIN :: TRANSACTION :: TRANSACTION", func() {
 
 	Describe("#WithEntries", func() {
 		Context("success cases", func() {
-			It("should balance each currency independently and preserve repeated account order", func() {
+			It("should balance a single currency and preserve repeated account order", func() {
 				brl, err := money.NewMoney(100, money.BRL)
 				Expect(err).NotTo(HaveOccurred())
-				usd, err := money.NewMoney(200, money.USD)
+				transferTotal, err := money.NewMoney(200, money.BRL)
 				Expect(err).NotTo(HaveOccurred())
 				entries := []*transaction.Entry{
 					buildEntry(transaction.Debit, transferDebitAccount, brl),
 					buildEntry(transaction.Credit, transferCreditAccount, brl),
-					buildEntry(transaction.Credit, transferDebitAccount, usd),
-					buildEntry(transaction.Debit, transferDebitAccount, usd),
+					buildEntry(transaction.Credit, transferDebitAccount, brl),
+					buildEntry(transaction.Debit, transferDebitAccount, brl),
 				}
 
 				built, err := transaction.NewTransactionBuilder().
 					WithID().
-					WithIdempotencyKey("multi-currency-entries").
-					WithAmount(brl).
+					WithIdempotencyKey("single-currency-entries").
+					WithAmount(transferTotal).
 					WithOperation(transaction.OperationTransfer).
 					WithEntries(entries).
 					Build()
@@ -140,6 +140,57 @@ var _ = Describe("INTERNAL :: DOMAIN :: TRANSACTION :: TRANSACTION", func() {
 		})
 
 		Context("error cases", func() {
+			It("should reject a root amount that differs from the balanced posting totals", func() {
+				// Arrange.
+				declaredAmount, err := money.NewMoney(101, money.BRL)
+				Expect(err).NotTo(HaveOccurred())
+				entryAmount, err := money.NewMoney(100, money.BRL)
+				Expect(err).NotTo(HaveOccurred())
+				entries := []*transaction.Entry{
+					buildEntry(transaction.Debit, transferDebitAccount, entryAmount),
+					buildEntry(transaction.Credit, transferCreditAccount, entryAmount),
+				}
+
+				// Act.
+				built, err := transaction.NewTransactionBuilder().
+					WithID().WithIdempotencyKey("amount-total-mismatch").
+					WithAmount(declaredAmount).WithOperation(transaction.OperationTransfer).
+					WithEntries(entries).Build()
+
+				// Assert.
+				Expect(built).To(BeNil())
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring(transaction.ErrTransactionAmountMismatch.Error()))
+			})
+
+			It("should reject entries with different currencies", func() {
+				// Arrange.
+				brl, err := money.NewMoney(100, money.BRL)
+				Expect(err).NotTo(HaveOccurred())
+				usd, err := money.NewMoney(100, money.USD)
+				Expect(err).NotTo(HaveOccurred())
+				entries := []*transaction.Entry{
+					buildEntry(transaction.Debit, transferDebitAccount, brl),
+					buildEntry(transaction.Credit, transferCreditAccount, brl),
+					buildEntry(transaction.Debit, transferDebitAccount, usd),
+					buildEntry(transaction.Credit, transferCreditAccount, usd),
+				}
+
+				// Act.
+				built, err := transaction.NewTransactionBuilder().
+					WithID().
+					WithIdempotencyKey("mixed-currency-entries").
+					WithAmount(brl).
+					WithOperation(transaction.OperationTransfer).
+					WithEntries(entries).
+					Build()
+
+				// Assert.
+				Expect(built).To(BeNil())
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring(transaction.ErrMixedEntryCurrencies.Error()))
+			})
+
 			It("should reject a transaction with a single entry", func() {
 				id, _ := entity.NewIDV7()
 				amount, _ := money.NewMoney(100, money.BRL)
@@ -198,7 +249,7 @@ var _ = Describe("INTERNAL :: DOMAIN :: TRANSACTION :: TRANSACTION", func() {
 				trans, err := transaction.NewTransactionBuilder().
 					WithID(id.String()).
 					WithIdempotencyKey("any_idempotency_key").
-					WithAmount(amount).
+					WithAmount(amount200).
 					WithOperation(transaction.OperationDeposit).
 					WithEntries([]*transaction.Entry{entry, entry2, entry3}).
 					Build()
@@ -269,7 +320,7 @@ var _ = Describe("INTERNAL :: DOMAIN :: TRANSACTION :: TRANSACTION", func() {
 					Build()
 
 				Expect(err).NotTo(BeNil())
-				Expect(err.Error()).To(ContainSubstring("balance by currency"))
+				Expect(err.Error()).To(ContainSubstring("balance in the transaction currency"))
 			})
 		})
 	})

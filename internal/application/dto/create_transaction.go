@@ -61,6 +61,7 @@ type canonicalEntryInput struct {
 }
 
 type canonicalEntriesTransactionInput struct {
+	Amount    int64                    `json:"amount"`
 	Entries   []canonicalEntryInput    `json:"entries"`
 	Operation string                   `json:"operation"`
 	Metadata  []canonicalMetadataEntry `json:"metadata"`
@@ -105,7 +106,10 @@ func (d CreateTransactionInput) Fingerprint() (string, error) {
 			Metadata:  entryMetadata,
 		})
 	}
-	canonical := canonicalEntriesTransactionInput{Entries: entries, Operation: util.String(d.Operation), Metadata: metadata}
+	canonical := canonicalEntriesTransactionInput{
+		Amount: util.Int64(d.Amount), Entries: entries,
+		Operation: util.String(d.Operation), Metadata: metadata,
+	}
 	raw, err := json.Marshal(canonical)
 	if err != nil {
 		return "", errors.New("failed to encode transaction fingerprint")
@@ -118,9 +122,14 @@ func (d CreateTransactionInput) validateFormat() error {
 	if d.Entries == nil {
 		return nil
 	}
-	if d.DebitAccountID != nil || d.CreditAccountID != nil || d.Amount != nil || d.Currency != nil {
+	if d.DebitAccountID != nil || d.CreditAccountID != nil || d.Currency != nil {
 		return fault.InvalidEntityError(errors.New("entries cannot be combined with legacy transaction fields"), map[string]any{
 			"entries": "cannot be combined with legacy fields",
+		})
+	}
+	if d.Amount == nil || *d.Amount <= 0 {
+		return fault.InvalidEntityError(errors.New("entries request must declare a positive transaction amount"), map[string]any{
+			"amount": "must be a positive total for entries",
 		})
 	}
 	if len(d.Entries) == 0 {
@@ -206,7 +215,10 @@ func (d *CreateTransactionInput) CreateTransactionFacade() (*transaction.Transac
 		}
 		entries = append(entries, entry)
 	}
-	amount := entries[0].Amount
+	amount, err := money.NewMoney(util.Int64(d.Amount), entries[0].Amount.Currency())
+	if err != nil {
+		return nil, err
+	}
 
 	return transaction.NewTransactionBuilder().
 		WithID().

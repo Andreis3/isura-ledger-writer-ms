@@ -11,16 +11,17 @@ import (
 )
 
 type Entry struct {
-	ID             pgtype.Text
-	AccountID      pgtype.Text
-	TransactionID  pgtype.Text
-	SequenceNumber pgtype.Int8
-	RunningBalance pgtype.Int8
-	Direction      pgtype.Text
-	Amount         pgtype.Int8
-	Currency       pgtype.Text
-	Metadata       []byte
-	CreatedAt      pgtype.Timestamptz
+	ID                  pgtype.Text
+	AccountID           pgtype.Text
+	TransactionID       pgtype.Text
+	SequenceNumber      pgtype.Int8
+	TransactionPosition pgtype.Int8
+	RunningBalance      pgtype.Int8
+	Direction           pgtype.Text
+	Amount              pgtype.Int8
+	Currency            pgtype.Text
+	Metadata            []byte
+	CreatedAt           pgtype.Timestamptz
 }
 
 func entryMetadataBytes(metadata map[string]string) ([]byte, error) {
@@ -47,16 +48,17 @@ func ToEntryModel(domain *transaction.Entry) (Entry, error) {
 		return Entry{}, fmt.Errorf("encode entry metadata: %w", err)
 	}
 	return Entry{
-		ID:             pgtype.Text{String: domain.ID.String(), Valid: true},
-		AccountID:      pgtype.Text{String: domain.AccountID, Valid: true},
-		TransactionID:  pgtype.Text{String: domain.TransactionID, Valid: true},
-		SequenceNumber: pgtype.Int8{Int64: domain.SequenceNumber, Valid: true},
-		RunningBalance: pgtype.Int8{Int64: domain.RunningBalance, Valid: true},
-		Direction:      pgtype.Text{String: string(domain.Direction), Valid: true},
-		Amount:         pgtype.Int8{Int64: domain.Amount.Amount(), Valid: true},
-		Currency:       pgtype.Text{String: string(domain.Amount.Currency()), Valid: true},
-		Metadata:       metadata,
-		CreatedAt:      pgtype.Timestamptz{Time: domain.CreatedAt, Valid: true},
+		ID:                  pgtype.Text{String: domain.ID.String(), Valid: true},
+		AccountID:           pgtype.Text{String: domain.AccountID, Valid: true},
+		TransactionID:       pgtype.Text{String: domain.TransactionID, Valid: true},
+		SequenceNumber:      pgtype.Int8{Int64: domain.SequenceNumber, Valid: true},
+		TransactionPosition: pgtype.Int8{Int64: domain.TransactionPosition, Valid: true},
+		RunningBalance:      pgtype.Int8{Int64: domain.RunningBalance, Valid: true},
+		Direction:           pgtype.Text{String: string(domain.Direction), Valid: true},
+		Amount:              pgtype.Int8{Int64: domain.Amount.Amount(), Valid: true},
+		Currency:            pgtype.Text{String: string(domain.Amount.Currency()), Valid: true},
+		Metadata:            metadata,
+		CreatedAt:           pgtype.Timestamptz{Time: domain.CreatedAt, Valid: true},
 	}, nil
 }
 
@@ -89,6 +91,7 @@ func ToEntryDomain(model Entry) (*transaction.Entry, error) {
 	}
 	entry.AssignAccountID(model.AccountID.String)
 	entry.SetSequenceNumber(model.SequenceNumber.Int64)
+	entry.SetTransactionPosition(model.TransactionPosition.Int64)
 	entry.SetRunningBalance(model.RunningBalance.Int64)
 	return entry, nil
 }

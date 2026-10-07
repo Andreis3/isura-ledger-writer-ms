@@ -145,6 +145,11 @@ proto-gen:
 	@buf generate
 
 migrate:
+	@if command -v psql >/dev/null 2>&1; then \
+		psql "$(DB_URL)" -v ON_ERROR_STOP=1 -f "$(SCHEMA_DIR)/backfills/transaction_position.sql"; \
+	else \
+		$(DOCKER_COMPOSE) exec -T postgres psql "$(DB_URL)" -v ON_ERROR_STOP=1 < "$(SCHEMA_DIR)/backfills/transaction_position.sql"; \
+	fi
 	atlas schema apply \
 	  -u "$(DB_URL)" \
 	  --to "file://$(SCHEMA_DIR)"

@@ -45,8 +45,8 @@ func insertReconciliationFixture(ctx context.Context, pool *pgxpool.Pool, sequen
 		transactionID, uuid.NewString(), "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", amount, now)
 	Expect(err).NotTo(HaveOccurred())
 	_, err = pool.Exec(ctx, `
-		INSERT INTO entries (id, account_id, transaction_id, sequence_number, direction, amount, running_balance, currency, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, 'BRL', $8)`,
+		INSERT INTO entries (id, account_id, transaction_id, sequence_number, transaction_position, direction, amount, running_balance, currency, created_at)
+		VALUES ($1, $2, $3, $4, 0, $5, $6, $7, 'BRL', $8)`,
 		entryID, accountID, transactionID, sequence, direction, amount, persistedBalance, now)
 	Expect(err).NotTo(HaveOccurred())
 	return accountID, transactionID, entryID
@@ -142,7 +142,7 @@ func insertFundedAccountsForCommand(ctx context.Context, pool *pgxpool.Pool, bal
 		VALUES ($1, $2, $3, 'COMPLETED', 'TRANSFER', $4, 'BRL', $5, $5)`,
 		seedTransactionID, "seed-"+uuid.NewString(), "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", balance, now)
 	Expect(err).NotTo(HaveOccurred())
-	for _, entry := range []struct {
+	for position, entry := range []struct {
 		accountID, direction string
 		balance              int64
 	}{
@@ -150,9 +150,9 @@ func insertFundedAccountsForCommand(ctx context.Context, pool *pgxpool.Pool, bal
 		{accountID: creditID, direction: "DEBIT", balance: -balance},
 	} {
 		_, err = pool.Exec(ctx, `
-			INSERT INTO entries (id, account_id, transaction_id, sequence_number, direction, amount, running_balance, currency, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, 'BRL', $8)`,
-			newIDV7(), entry.accountID, seedTransactionID, sequence, entry.direction, balance, entry.balance, now)
+			INSERT INTO entries (id, account_id, transaction_id, sequence_number, transaction_position, direction, amount, running_balance, currency, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'BRL', $9)`,
+			newIDV7(), entry.accountID, seedTransactionID, sequence, position, entry.direction, balance, entry.balance, now)
 		Expect(err).NotTo(HaveOccurred())
 	}
 	return debitExternalID, creditExternalID

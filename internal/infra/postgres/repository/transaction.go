@@ -50,19 +50,21 @@ func (r *TransactionRepository) Save(ctx context.Context, data *transaction.Tran
 		transactionModel.UpdatedAt,
 	)
 
-	for _, entry := range data.Entries {
+	for position, entry := range data.Entries {
+		entry.SetTransactionPosition(int64(position))
 		entryModel, err := model.ToEntryModel(entry)
 		if err != nil {
 			return err
 		}
 		batch.Queue(`
 			INSERT INTO entries
-				(id, account_id, transaction_id, sequence_number, direction, amount, running_balance, currency, metadata, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+			(id, account_id, transaction_id, sequence_number, transaction_position, direction, amount, running_balance, currency, metadata, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 			entryModel.ID,
 			entryModel.AccountID,
 			entryModel.TransactionID,
 			entryModel.SequenceNumber,
+			entryModel.TransactionPosition,
 			entryModel.Direction,
 			entryModel.Amount,
 			entryModel.RunningBalance,
@@ -216,11 +218,11 @@ func (r *TransactionRepository) findEntries(ctx context.Context, transactionID s
 	}
 	db := resolveDB(ctx, r.db)
 	rows, err := db.Query(ctx, `
-		SELECT id, account_id, transaction_id, sequence_number, direction, amount,
+		SELECT id, account_id, transaction_id, sequence_number, transaction_position, direction, amount,
 			running_balance, currency, metadata, created_at
 		FROM entries
 		WHERE transaction_id = $1
-		ORDER BY sequence_number`, transactionID)
+		ORDER BY transaction_position`, transactionID)
 	if err != nil {
 		return nil, err
 	}
@@ -234,6 +236,7 @@ func (r *TransactionRepository) findEntries(ctx context.Context, transactionID s
 			&entryModel.AccountID,
 			&entryModel.TransactionID,
 			&entryModel.SequenceNumber,
+			&entryModel.TransactionPosition,
 			&entryModel.Direction,
 			&entryModel.Amount,
 			&entryModel.RunningBalance,

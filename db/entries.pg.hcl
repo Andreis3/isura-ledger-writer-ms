@@ -21,6 +21,11 @@ table "entries" {
     null = false
   }
 
+  column "transaction_position" {
+    type = bigint
+    null = false
+  }
+
   column "direction" {
     type = varchar(6)
     null = false
@@ -69,6 +74,11 @@ table "entries" {
     columns = [column.transaction_id]
   }
 
+  index "unique_entry_transaction_position" {
+    columns = [column.transaction_id, column.transaction_position]
+    unique = true
+  }
+
   index "idx_entries_sequence_number_desc" {
     columns = [
       column.account_id,
@@ -90,6 +100,10 @@ table "entries" {
 
   check "entries_sequence_number_positive" {
     expr = "sequence_number > 0"
+  }
+
+  check "entries_transaction_position_non_negative" {
+    expr = "transaction_position >= 0"
   }
 
   check "entries_direction_valid" {
