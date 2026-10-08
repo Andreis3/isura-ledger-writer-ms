@@ -87,6 +87,7 @@ func (s *GRPCServer) buildLedgerServer() *grpcTransport.LedgerServer {
 		s.deps.Tracer,
 		s.deps.Log,
 		s.deps.Prom,
+		s.deps.Cfg.Transaction.MaxEntries,
 	)
 
 	// handlers

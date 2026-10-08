@@ -1,6 +1,9 @@
 {
   "application_name": "isura-ledger-ms",
   "env": "xxxx",
+  "transaction": {
+    "max_entries": 100
+  },
   "servers" :{
     "grpc": {
       "port": "xxx"

@@ -6,17 +6,23 @@ import (
 	"strings"
 	"time"
 
+	"github.com/andreis3/isura-ledger-ms/internal/application"
 	"github.com/spf13/viper"
 )
 
 type Configs struct {
 	ApplicationName string        `mapstructure:"application_name"`
 	Env             string        `mapstructure:"env"`
+	Transaction     Transaction   `mapstructure:"transaction"`
 	Servers         Servers       `mapstructure:"servers"`
 	DataBase        DataBase      `mapstructure:"data_base"`
 	OpenTelemetry   OpemTelemetry `mapstructure:"open_telemetry"`
 	Nats            Nats          `mapstructure:"nats"`
 	Version         string        `mapstructure:"version"`
+}
+
+type Transaction struct {
+	MaxEntries int `mapstructure:"max_entries"`
 }
 
 type Servers struct {
@@ -85,6 +91,7 @@ func LoadConfig() *Configs {
 	viper.SetConfigType("json")
 	viper.AddConfigPath(".")
 	viper.AddConfigPath("/")
+	viper.SetDefault("transaction.max_entries", application.DefaultMaxTransactionEntries)
 	viper.AutomaticEnv()
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "__"))
 
@@ -108,6 +115,7 @@ func LoadConfig() *Configs {
 // bindEnvs maps environment variables to the keys in config.json.
 // Env vars take precedence over the configuration file.
 func bindEnvs() {
+	_ = viper.BindEnv("transaction.max_entries", "TRANSACTION_MAX_ENTRIES")
 	_ = viper.BindEnv("env", "APP_ENV")
 	_ = viper.BindEnv("application_name", "APPLICATION_NAME")
 	_ = viper.BindEnv("Version", "VERSION")

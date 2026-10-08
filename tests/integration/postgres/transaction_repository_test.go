@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/andreis3/isura-ledger-ms/internal/application"
 	command "github.com/andreis3/isura-ledger-ms/internal/application/command"
 	dto "github.com/andreis3/isura-ledger-ms/internal/application/dto"
 	fault "github.com/andreis3/isura-ledger-ms/internal/domain/fault"
@@ -224,6 +225,7 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: TRANSACTION REPOSITORY", f
 				repository.NewTransactionRepository(pool),
 				repository.NewOutBoxRepository(pool),
 				adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{},
+				application.DefaultMaxTransactionEntries,
 			)
 			results := make(chan *dto.CreateTransactionOutput, 2)
 			errorsCh := make(chan error, 2)
@@ -261,6 +263,141 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: TRANSACTION REPOSITORY", f
 			var count int
 			Expect(pool.QueryRow(ctx, "SELECT count(*) FROM transactions WHERE idempotency_key = $1", key).Scan(&count)).To(Succeed())
 			Expect(count).To(Equal(1))
+		})
+		It("should create, replay, and reject conflicting multi-entry intents atomically", func() {
+			debitExternalID, creditExternalID := insertFundedAccountsForCommand(ctx, pool, 100, 1)
+			key := "multi-" + uuid.NewString()
+			amount := int64(100)
+			operation := string(transaction.OperationTransfer)
+			input := dto.CreateTransactionInput{
+				IdempotencyKey: &key,
+				Amount:         &amount,
+				Operation:      &operation,
+				Entries: []dto.EntryInput{
+					{AccountID: creditExternalID, Direction: string(transaction.Credit), Amount: 70, Currency: string(money.BRL)},
+					{AccountID: debitExternalID, Direction: string(transaction.Debit), Amount: 100, Currency: string(money.BRL)},
+					{AccountID: creditExternalID, Direction: string(transaction.Credit), Amount: 30, Currency: string(money.BRL)},
+				},
+			}
+			createTransaction := newIntegrationCreateTransaction(pool)
+
+			first, err := createTransaction.Execute(ctx, input)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(first.IdempotentReplay).To(BeFalse())
+			second, err := createTransaction.Execute(ctx, input)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(second.IdempotentReplay).To(BeTrue())
+			Expect(second.TransactionID).To(Equal(first.TransactionID))
+
+			conflictingInput := input
+			conflictingInput.Amount = new(int64(90))
+			conflictingInput.Entries = append([]dto.EntryInput(nil), input.Entries...)
+			conflictingInput.Entries[0].Amount = 60
+			conflictingInput.Entries[1].Amount = 90
+			conflictingInput.Entries[2].Amount = 30
+			conflictResult, err := createTransaction.Execute(ctx, conflictingInput)
+			Expect(conflictResult).To(BeNil())
+			Expect(err).To(HaveOccurred())
+			Expect(errors.Is(err, fault.ErrIdempotencyConflict)).To(BeTrue())
+
+			loaded, err := repository.NewTransactionRepository(pool).Find(ctx, transaction.TransactionCriteria{
+				ID: first.TransactionID, WithEntries: true,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(entryPositions(loaded.Entries)).To(Equal([]int64{0, 1, 2}))
+			Expect(loaded.Entries[0].AccountID).NotTo(Equal(loaded.Entries[1].AccountID))
+			Expect(loaded.Entries[0].AccountID).To(Equal(loaded.Entries[2].AccountID))
+			var debitAccountID, creditAccountID string
+			Expect(pool.QueryRow(ctx, `SELECT id FROM accounts WHERE account_external_id = $1`, debitExternalID).Scan(&debitAccountID)).To(Succeed())
+			Expect(pool.QueryRow(ctx, `SELECT id FROM accounts WHERE account_external_id = $1`, creditExternalID).Scan(&creditAccountID)).To(Succeed())
+			Expect(loaded.Entries[0].AccountID).To(Equal(creditAccountID))
+			Expect(loaded.Entries[1].AccountID).To(Equal(debitAccountID))
+
+			var transactions, entries, outboxes int
+			Expect(pool.QueryRow(ctx, `SELECT count(*) FROM transactions WHERE idempotency_key = $1`, key).Scan(&transactions)).To(Succeed())
+			Expect(pool.QueryRow(ctx, `SELECT count(*) FROM entries WHERE transaction_id = $1`, *first.TransactionID).Scan(&entries)).To(Succeed())
+			Expect(pool.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE aggregate_id = $1`, *first.TransactionID).Scan(&outboxes)).To(Succeed())
+			Expect(transactions).To(Equal(1))
+			Expect(entries).To(Equal(3))
+			Expect(outboxes).To(Equal(1))
+		})
+		It("should reject mixed-currency composition without persisting any records", func() {
+			debitExternalID, creditExternalID := insertFundedAccountsForCommand(ctx, pool, 100, 1)
+			key := "mixed-currency-" + uuid.NewString()
+			amount := int64(100)
+			operation := string(transaction.OperationTransfer)
+			result, err := newIntegrationCreateTransaction(pool).Execute(ctx, dto.CreateTransactionInput{
+				IdempotencyKey: &key,
+				Amount:         &amount,
+				Operation:      &operation,
+				Entries: []dto.EntryInput{
+					{AccountID: debitExternalID, Direction: string(transaction.Debit), Amount: 100, Currency: string(money.BRL)},
+					{AccountID: creditExternalID, Direction: string(transaction.Credit), Amount: 100, Currency: string(money.USD)},
+				},
+			})
+			Expect(result).To(BeNil())
+			Expect(err).To(HaveOccurred())
+			var transactions int
+			Expect(pool.QueryRow(ctx, `SELECT count(*) FROM transactions WHERE idempotency_key = $1`, key).Scan(&transactions)).To(Succeed())
+			Expect(transactions).To(BeZero())
+			var outboxes int
+			Expect(pool.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE aggregate_id IN (SELECT id::text FROM transactions WHERE idempotency_key = $1)`, key).Scan(&outboxes)).To(Succeed())
+			Expect(outboxes).To(BeZero())
+		})
+		It("should serialize concurrent multi-entry requests against shared account balances", func() {
+			debitExternalID, creditExternalID := insertFundedAccountsForCommand(ctx, pool, 100, 1)
+			createTransaction := newIntegrationCreateTransaction(pool)
+			start := make(chan struct{})
+			results := make(chan commandResult, 2)
+			var wg sync.WaitGroup
+			for range 2 {
+				key := "mc-" + uuid.NewString()
+				amount := int64(100)
+				operation := string(transaction.OperationTransfer)
+				input := dto.CreateTransactionInput{
+					IdempotencyKey: &key,
+					Amount:         &amount,
+					Operation:      &operation,
+					Entries: []dto.EntryInput{
+						{AccountID: debitExternalID, Direction: string(transaction.Debit), Amount: 100, Currency: string(money.BRL)},
+						{AccountID: creditExternalID, Direction: string(transaction.Credit), Amount: 60, Currency: string(money.BRL)},
+						{AccountID: creditExternalID, Direction: string(transaction.Credit), Amount: 40, Currency: string(money.BRL)},
+					},
+				}
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					<-start
+					output, err := createTransaction.Execute(ctx, input)
+					results <- commandResult{output: output, err: err}
+				}()
+			}
+			close(start)
+			wg.Wait()
+			close(results)
+
+			successes, insufficientBalance := 0, 0
+			for result := range results {
+				if result.err == nil {
+					successes++
+					continue
+				}
+				if errors.Is(result.err, fault.ErrInsufficientBalance) {
+					insufficientBalance++
+					continue
+				}
+				Fail("unexpected multi-entry concurrency error: " + result.err.Error())
+			}
+			Expect(successes).To(Equal(1))
+			Expect(insufficientBalance).To(Equal(1))
+
+			var transactions, entries, outboxes int
+			Expect(pool.QueryRow(ctx, `SELECT count(*) FROM transactions WHERE idempotency_key LIKE 'mc-%'`).Scan(&transactions)).To(Succeed())
+			Expect(pool.QueryRow(ctx, `SELECT count(*) FROM entries WHERE transaction_id IN (SELECT id FROM transactions WHERE idempotency_key LIKE 'mc-%')`).Scan(&entries)).To(Succeed())
+			Expect(pool.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE aggregate_id IN (SELECT id::text FROM transactions WHERE idempotency_key LIKE 'mc-%')`).Scan(&outboxes)).To(Succeed())
+			Expect(transactions).To(Equal(1))
+			Expect(entries).To(Equal(3))
+			Expect(outboxes).To(Equal(1))
 		})
 		It("should approve only one of two concurrent debits that consume the available balance", func() {
 			debitExternalID, creditExternalID := insertFundedAccountsForCommand(ctx, pool, 100, 10)

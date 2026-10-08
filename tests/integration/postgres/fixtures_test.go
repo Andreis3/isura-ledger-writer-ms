@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/andreis3/isura-ledger-ms/internal/application"
 	"github.com/andreis3/isura-ledger-ms/internal/application/command"
 	"github.com/andreis3/isura-ledger-ms/internal/application/dto"
 	"github.com/andreis3/isura-ledger-ms/internal/application/service"
@@ -186,6 +187,7 @@ func newIntegrationCreateTransaction(pool *pgxpool.Pool) *command.CreateTransact
 		repository.NewTransactionRepository(pool),
 		repository.NewOutBoxRepository(pool),
 		adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{},
+		application.DefaultMaxTransactionEntries,
 	)
 }
 
