@@ -2,6 +2,7 @@ package configs
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"time"
@@ -87,68 +88,70 @@ type Postgres struct {
 	MaxConnIdleTime time.Duration `mapstructure:"max_conn_idle_time"`
 }
 
-func LoadConfig() *Configs {
-	viper.SetConfigName("config")
-	viper.SetConfigType("json")
-	viper.AddConfigPath(".")
-	viper.AddConfigPath("/")
-	viper.SetDefault("transaction.max_entries", application.DefaultMaxTransactionEntries)
-	viper.AutomaticEnv()
-	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "__"))
+func LoadConfig() (*Configs, error) {
+	config := viper.New()
+	config.SetConfigName("config")
+	config.SetConfigType("json")
+	config.AddConfigPath(".")
+	config.AddConfigPath("/")
+	config.SetDefault("transaction.max_entries", application.DefaultMaxTransactionEntries)
+	config.AutomaticEnv()
+	config.SetEnvKeyReplacer(strings.NewReplacer(".", "__"))
+	bindEnvs(config)
 
-	if err := viper.ReadInConfig(); err != nil {
+	if err := config.ReadInConfig(); err != nil {
 		if _, ok := errors.AsType[viper.ConfigFileNotFoundError](err); !ok {
-			return nil
+			return nil, fmt.Errorf("read config file: %w", err)
 		}
 	}
 
-	bindEnvs()
-
 	var configs Configs
-	if err := viper.Unmarshal(&configs); err != nil {
-		return nil
+	if err := config.Unmarshal(&configs); err != nil {
+		return nil, fmt.Errorf("unmarshal config: %w", err)
 	}
 
-	_ = os.Setenv("ENV", configs.Env)
-	return &configs
+	if err := os.Setenv("ENV", configs.Env); err != nil {
+		return nil, fmt.Errorf("set ENV from config: %w", err)
+	}
+	return &configs, nil
 }
 
 // bindEnvs maps environment variables to the keys in config.json.
 // Env vars take precedence over the configuration file.
-func bindEnvs() {
-	_ = viper.BindEnv("transaction.max_entries", "TRANSACTION_MAX_ENTRIES")
-	_ = viper.BindEnv("env", "APP_ENV")
-	_ = viper.BindEnv("application_name", "APPLICATION_NAME")
-	_ = viper.BindEnv("Version", "VERSION")
-	_ = viper.BindEnv("servers.grpc.port", "GRPC_PORT")
-	_ = viper.BindEnv("servers.http.port", "HTTP_PORT")
-	_ = viper.BindEnv("data_base.postgres.host", "POSTGRES_HOST")
-	_ = viper.BindEnv("data_base.postgres.port", "POSTGRES_PORT")
-	_ = viper.BindEnv("data_base.postgres.user", "POSTGRES_USER")
-	_ = viper.BindEnv("data_base.postgres.password", "POSTGRES_PASSWORD")
-	_ = viper.BindEnv("data_base.postgres.database", "POSTGRES_DB")
-	_ = viper.BindEnv("data_base.postgres.ssl_mode", "POSTGRES_SSL_MODE")
-	_ = viper.BindEnv("data_base.postgres.max_connections", "POSTGRES_MAX_CONNECTIONS")
-	_ = viper.BindEnv("data_base.postgres.min_connections", "POSTGRES_MIN_CONNECTIONS")
-	_ = viper.BindEnv("data_base.postgres.max_conn_lifetime", "POSTGRES_MAX_CONN_LIFETIME")
-	_ = viper.BindEnv("data_base.postgres.max_conn_idle_time", "POSTGRES_MAX_CONN_IDLE_TIME")
-	_ = viper.BindEnv("open_telemetry.host", "OTEL_HOST")
-	_ = viper.BindEnv("nats.url", "NATS_URL")
-	_ = viper.BindEnv("nats.name", "NATS_NAME")
-	_ = viper.BindEnv("nats.subject", "NATS_SUBJECT")
-	_ = viper.BindEnv("nats.consumer.stream", "NATS_CONSUMER_STREAM")
-	_ = viper.BindEnv("nats.consumer.name", "NATS_CONSUMER_NAME")
-	_ = viper.BindEnv("nats.consumer.durable", "NATS_CONSUMER_DURABLE")
-	_ = viper.BindEnv("nats.consumer.ack_wait", "NATS_CONSUMER_ACK_WAIT")
-	_ = viper.BindEnv("nats.consumer.max_deliver", "NATS_CONSUMER_MAX_DELIVER")
-	_ = viper.BindEnv("nats.consumer.max_workers", "NATS_CONSUMER_MAX_WORKERS")
-	_ = viper.BindEnv("nats.consumer.max_message_size", "NATS_CONSUMER_MAX_MESSAGE_SIZE")
-	_ = viper.BindEnv("nats.relay.stream", "NATS_RELAY_STREAM")
-	_ = viper.BindEnv("nats.relay.subject", "NATS_RELAY_SUBJECT")
-	_ = viper.BindEnv("nats.relay.dlq_subject", "NATS_RELAY_DLQ_SUBJECT")
-	_ = viper.BindEnv("nats.relay.batch_size", "NATS_RELAY_BATCH_SIZE")
-	_ = viper.BindEnv("nats.relay.max_workers", "NATS_RELAY_MAX_WORKERS")
-	_ = viper.BindEnv("nats.relay.max_attempts", "NATS_RELAY_MAX_ATTEMPTS")
-	_ = viper.BindEnv("nats.relay.poll_interval", "NATS_RELAY_POLL_INTERVAL")
-	_ = viper.BindEnv("nats.relay.retry_after", "NATS_RELAY_RETRY_AFTER")
+func bindEnvs(config *viper.Viper) {
+	_ = config.BindEnv("transaction.max_entries", "TRANSACTION_MAX_ENTRIES")
+	_ = config.BindEnv("env", "APP_ENV")
+	_ = config.BindEnv("application_name", "APPLICATION_NAME")
+	_ = config.BindEnv("Version", "VERSION")
+	_ = config.BindEnv("servers.grpc.port", "GRPC_PORT")
+	_ = config.BindEnv("servers.http.port", "HTTP_PORT")
+	_ = config.BindEnv("data_base.postgres.host", "POSTGRES_HOST")
+	_ = config.BindEnv("data_base.postgres.port", "POSTGRES_PORT")
+	_ = config.BindEnv("data_base.postgres.user", "POSTGRES_USER")
+	_ = config.BindEnv("data_base.postgres.password", "POSTGRES_PASSWORD")
+	_ = config.BindEnv("data_base.postgres.database", "POSTGRES_DB")
+	_ = config.BindEnv("data_base.postgres.ssl_mode", "POSTGRES_SSL_MODE")
+	_ = config.BindEnv("data_base.postgres.max_connections", "POSTGRES_MAX_CONNECTIONS")
+	_ = config.BindEnv("data_base.postgres.min_connections", "POSTGRES_MIN_CONNECTIONS")
+	_ = config.BindEnv("data_base.postgres.max_conn_lifetime", "POSTGRES_MAX_CONN_LIFETIME")
+	_ = config.BindEnv("data_base.postgres.max_conn_idle_time", "POSTGRES_MAX_CONN_IDLE_TIME")
+	_ = config.BindEnv("open_telemetry.host", "OTEL_HOST")
+	_ = config.BindEnv("nats.url", "NATS_URL")
+	_ = config.BindEnv("nats.name", "NATS_NAME")
+	_ = config.BindEnv("nats.subject", "NATS_SUBJECT")
+	_ = config.BindEnv("nats.consumer.stream", "NATS_CONSUMER_STREAM")
+	_ = config.BindEnv("nats.consumer.name", "NATS_CONSUMER_NAME")
+	_ = config.BindEnv("nats.consumer.durable", "NATS_CONSUMER_DURABLE")
+	_ = config.BindEnv("nats.consumer.ack_wait", "NATS_CONSUMER_ACK_WAIT")
+	_ = config.BindEnv("nats.consumer.max_deliver", "NATS_CONSUMER_MAX_DELIVER")
+	_ = config.BindEnv("nats.consumer.max_workers", "NATS_CONSUMER_MAX_WORKERS")
+	_ = config.BindEnv("nats.consumer.max_message_size", "NATS_CONSUMER_MAX_MESSAGE_SIZE")
+	_ = config.BindEnv("nats.relay.stream", "NATS_RELAY_STREAM")
+	_ = config.BindEnv("nats.relay.subject", "NATS_RELAY_SUBJECT")
+	_ = config.BindEnv("nats.relay.dlq_subject", "NATS_RELAY_DLQ_SUBJECT")
+	_ = config.BindEnv("nats.relay.batch_size", "NATS_RELAY_BATCH_SIZE")
+	_ = config.BindEnv("nats.relay.max_workers", "NATS_RELAY_MAX_WORKERS")
+	_ = config.BindEnv("nats.relay.max_attempts", "NATS_RELAY_MAX_ATTEMPTS")
+	_ = config.BindEnv("nats.relay.poll_interval", "NATS_RELAY_POLL_INTERVAL")
+	_ = config.BindEnv("nats.relay.retry_after", "NATS_RELAY_RETRY_AFTER")
 }
