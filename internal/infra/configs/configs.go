@@ -54,14 +54,15 @@ type Nats struct {
 }
 
 type OutboxRelay struct {
-	Stream       string        `mapstructure:"stream"`
-	Subject      string        `mapstructure:"subject"`
-	DLQSubject   string        `mapstructure:"dlq_subject"`
-	BatchSize    int           `mapstructure:"batch_size"`
-	MaxWorkers   int           `mapstructure:"max_workers"`
-	MaxAttempts  int           `mapstructure:"max_attempts"`
-	PollInterval time.Duration `mapstructure:"poll_interval"`
-	RetryAfter   time.Duration `mapstructure:"retry_after"`
+	Stream          string        `mapstructure:"stream"`
+	Subject         string        `mapstructure:"subject"`
+	DLQSubject      string        `mapstructure:"dlq_subject"`
+	BatchSize       int           `mapstructure:"batch_size"`
+	MaxWorkers      int           `mapstructure:"max_workers"`
+	MaxAttempts     int           `mapstructure:"max_attempts"`
+	PollInterval    time.Duration `mapstructure:"poll_interval"`
+	RetryAfter      time.Duration `mapstructure:"retry_after"`
+	ShutdownTimeout time.Duration `mapstructure:"shutdown_timeout"`
 }
 
 type NatsConsumer struct {

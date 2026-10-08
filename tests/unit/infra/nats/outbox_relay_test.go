@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/nats-io/nats.go"
 
@@ -106,12 +107,62 @@ var _ = Describe("INTERNAL :: INFRA :: NATS :: OUTBOX RELAY", func() {
 				Expect(js.AssertExpectations(GinkgoT())).To(BeTrue())
 			})
 		})
+
+		Context("shutdown cases", func() {
+			It("should cancel and await a blocked publish while restoring its retry attempt", func() {
+				// Arrange (Given)
+				item, err := outbox.NewOutbox("transaction-id", []byte("payload"))
+				Expect(err).NotTo(HaveOccurred())
+				item.Attempts = 3
+				queuedItem, err := outbox.NewOutbox("queued-transaction-id", []byte("queued-payload"))
+				Expect(err).NotTo(HaveOccurred())
+				queuedItem.Attempts = 3
+				repo := new(repositorymocks.OutboxRepositoryMock)
+				repo.On("ClaimPending", mock.Anything, 10, 3, mock.Anything).Return([]*outbox.Outbox{item, queuedItem}, nil).Once()
+				retryState := mock.MatchedBy(func(data outbox.UpdateOutboxData) bool {
+					return data.Status == outbox.Failed && data.Attempts == item.Attempts-1
+				})
+				repo.On("UpdateOutboxData", mock.Anything, item.ID, retryState).Return(nil).Once()
+				repo.On("UpdateOutboxData", mock.Anything, queuedItem.ID, retryState).Return(nil).Once()
+				publishStarted := make(chan struct{}, 2)
+				publishExited := make(chan struct{}, 2)
+				js := new(adaptermocks.JetStreamMock)
+				js.On("PublishMsg", mock.Anything, mock.Anything, mock.Anything).
+					Run(func(args mock.Arguments) {
+						publishCtx := args.Get(0).(context.Context)
+						publishStarted <- struct{}{}
+						<-publishCtx.Done()
+						publishExited <- struct{}{}
+					}).Return((*jetstream.PubAck)(nil), context.Canceled).Once()
+				relay := newRelayForTestWithTimeout(repo, js, 3, 30*time.Millisecond)
+				runCtx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				done := make(chan error, 1)
+				go func() { done <- relay.Run(runCtx) }()
+
+				// Act (When)
+				Eventually(publishStarted).Should(Receive())
+				cancel()
+				runErr := <-done
+
+				// Assert (Then)
+				Expect(runErr).NotTo(HaveOccurred())
+				Expect(publishExited).Should(Receive())
+				Expect(publishStarted).Should(BeEmpty())
+				Expect(repo.AssertExpectations(GinkgoT())).To(BeTrue())
+				Expect(js.AssertExpectations(GinkgoT())).To(BeTrue())
+			})
+		})
 	})
 })
 
 func newRelayForTest(repo *repositorymocks.OutboxRepositoryMock, js *adaptermocks.JetStreamMock, maxAttempts int) *relayNATS.OutboxRelay {
+	return newRelayForTestWithTimeout(repo, js, maxAttempts, 10*time.Second)
+}
+
+func newRelayForTestWithTimeout(repo *repositorymocks.OutboxRepositoryMock, js *adaptermocks.JetStreamMock, maxAttempts int, shutdownTimeout time.Duration) *relayNATS.OutboxRelay {
 	return relayNATS.NewOutboxRelay(repo, js, adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{}, configs.OutboxRelay{
-		BatchSize: 10, MaxWorkers: 1, MaxAttempts: maxAttempts,
+		BatchSize: 10, MaxWorkers: 1, MaxAttempts: maxAttempts, ShutdownTimeout: shutdownTimeout,
 	})
 }
 
