@@ -39,11 +39,13 @@ As convenções obrigatórias estão em:
 
 Consulte antes de criar ou alterar código.
 
-As regras gerais para código Go estão em:
+As regras gerais para código Go estão na skill:
 
 ```text
-.agents/rules/golang.md
+.agents/skills/golang/SKILL.md
 ```
+
+Consulte as referências pertinentes em `.agents/skills/golang/references/`.
 
 Consulte antes de criar ou alterar código Go, especialmente para:
 
@@ -58,6 +60,8 @@ Consulte antes de criar ou alterar código Go, especialmente para:
 * sincronização;
 * cancelamento;
 * recursos.
+
+Para decisões de design orientadas por SOLID em Go, consulte `.agents/skills/solid-go/SKILL.md`. SOLID não autoriza novas abstrações sem necessidade concreta.
 
 As regras obrigatórias de testes estão em:
 

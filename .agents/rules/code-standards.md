@@ -2,7 +2,7 @@
 
 Estas regras se aplicam a todo código novo ou alterado neste repositório. Os exemplos usam Go.
 
-Regras específicas de concorrência, `context`, erros, graceful shutdown e observabilidade devem ser mantidas em `.agents/rules/golang.md` quando esse arquivo estiver disponível.
+Regras específicas de concorrência, `context`, erros, graceful shutdown e observabilidade estão na skill `.agents/skills/golang/SKILL.md` e nas referências pertinentes em `.agents/skills/golang/references/`. SOLID idiomático em Go está em `.agents/skills/solid-go/SKILL.md`.
 
 ## Formatação e estilo Go
 
