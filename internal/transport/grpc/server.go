@@ -7,8 +7,6 @@ import (
 	pb "github.com/andreis3/isura-ledger-ms/internal/transport/grpc/pb/ledger/v1"
 )
 
-type Handlers map[string]any
-
 type LedgerServer struct {
 	pb.UnimplementedLedgerServiceServer
 	createAccount     *handler.CreateAccountHandler
