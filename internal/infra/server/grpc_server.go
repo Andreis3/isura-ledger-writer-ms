@@ -93,9 +93,10 @@ func (s *GRPCServer) buildLedgerServer() *grpcTransport.LedgerServer {
 	// handlers
 	createAccountHandler := handler.NewCreateAccountHandler(createAccount, s.deps.Log, s.deps.Tracer)
 	createTransactionHandler := handler.NewCreateTransactionHandler(createTransaction, s.deps.Log, s.deps.Tracer)
+	getTransactionHandler := handler.NewGetTransactionHandler(command.NewGetTransaction(composer.BuildTransactionRepo()))
 
 	// server
-	ledgerServer := grpcTransport.NewLedgerServer(createAccountHandler, createTransactionHandler)
+	ledgerServer := grpcTransport.NewLedgerServer(createAccountHandler, createTransactionHandler, getTransactionHandler)
 
 	// server
 	return ledgerServer

@@ -13,13 +13,19 @@ type LedgerServer struct {
 	pb.UnimplementedLedgerServiceServer
 	createAccount     *handler.CreateAccountHandler
 	createTransaction *handler.CreateTransactionHandler
+	getTransaction    *handler.GetTransactionHandler
 }
 
-func NewLedgerServer(createAccount *handler.CreateAccountHandler, createTransaction *handler.CreateTransactionHandler) *LedgerServer {
+func NewLedgerServer(createAccount *handler.CreateAccountHandler, createTransaction *handler.CreateTransactionHandler, getTransaction *handler.GetTransactionHandler) *LedgerServer {
 	return &LedgerServer{
 		createAccount:     createAccount,
 		createTransaction: createTransaction,
+		getTransaction:    getTransaction,
 	}
+}
+
+func (s *LedgerServer) GetTransaction(ctx context.Context, req *pb.GetTransactionRequest) (*pb.GetTransactionResponse, error) {
+	return s.getTransaction.Handle(ctx, req)
 }
 
 func (s *LedgerServer) CreateTransaction(ctx context.Context, req *pb.CreateTransactionRequest) (*pb.CreateTransactionResponse, error) {

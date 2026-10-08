@@ -32,8 +32,22 @@ func (h *CreateTransactionHandler) Handle(ctx context.Context, req *pb.CreateTra
 	ctx, span := h.tracer.Start(ctx, "CreateTransactionHandler.Handle")
 	defer span.End()
 
+	var entries []dto.EntryInput
+	if len(req.GetEntries()) > 0 {
+		entries = make([]dto.EntryInput, 0, len(req.GetEntries()))
+	}
+	for _, entry := range req.GetEntries() {
+		entries = append(entries, dto.EntryInput{
+			AccountID: entry.GetAccountId(),
+			Direction: entry.GetDirection(),
+			Amount:    entry.GetAmount(),
+			Currency:  entry.GetCurrency(),
+			Metadata:  entry.GetMetadata(),
+		})
+	}
 	input := dto.CreateTransactionInput{
 		IdempotencyKey:  stringPointer(req.GetIdempotencyKey()),
+		Entries:         entries,
 		DebitAccountID:  stringPointer(req.GetDebitAccountId()),
 		CreditAccountID: stringPointer(req.GetCreditAccountId()),
 		Amount:          int64Pointer(req.GetAmount()),

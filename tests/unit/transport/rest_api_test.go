@@ -86,6 +86,24 @@ var _ = Describe("INTERNAL :: TRANSPORT :: REST :: API", func() {
 
 	Describe("#CreateTransaction", func() {
 		Context("success cases", func() {
+			It("should map multiple ordered entries and preserve their metadata", func() {
+				// Arrange
+				useCase := &createTransactionAPIFake{output: &dto.CreateTransactionOutput{Status: "COMPLETED"}}
+				sut := handler.NewCreateTransactionHandler(useCase, adapter.SilentLoggerMock{}, adapter.SilentTracerMock{})
+				request := httptest.NewRequest(http.MethodPost, "/transactions", strings.NewReader(`{"amount":100,"operation":"TRANSFER","entries":[{"account_id":"account-a","direction":"DEBIT","amount":100,"currency":"BRL","metadata":{"source":"api"}},{"account_id":"account-b","direction":"CREDIT","amount":100,"currency":"BRL"}]}`))
+				response := httptest.NewRecorder()
+
+				// Act
+				sut.Handle(response, request)
+
+				// Assert
+				Expect(response.Code).To(Equal(http.StatusCreated))
+				Expect(useCase.input.Entries).To(HaveLen(2))
+				Expect(useCase.input.Entries[0].Direction).To(Equal("DEBIT"))
+				Expect(useCase.input.Entries[0].Metadata).To(HaveKeyWithValue("source", "api"))
+				Expect(useCase.input.Entries[1].AccountID).To(Equal("account-b"))
+			})
+
 			It("should accept the idempotency header and return HTTP 201", func() {
 				// Arrange
 				transactionID := "transaction-123"
