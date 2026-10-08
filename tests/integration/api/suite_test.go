@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -142,6 +143,86 @@ var _ = AfterSuite(func() {
 
 var _ = Describe("REST API", func() {
 	Context("success cases", func() {
+		It("should accept concurrent requests at the configured 100-entry limit", func() {
+			const requestCount = 8
+			const entriesPerRequest = 100
+			type requestEntry struct {
+				AccountID string `json:"account_id"`
+				Direction string `json:"direction"`
+				Amount    int    `json:"amount"`
+				Currency  string `json:"currency"`
+			}
+			type transactionRequest struct {
+				IdempotencyKey string         `json:"idempotency_key"`
+				Operation      string         `json:"operation"`
+				Amount         int            `json:"amount"`
+				Entries        []requestEntry `json:"entries"`
+			}
+			type result struct {
+				response *httptest.ResponseRecorder
+				elapsed  time.Duration
+			}
+
+			// Arrange: each request uses isolated accounts and a balanced composition at the limit.
+			requests := make([]string, requestCount)
+			for requestIndex := range requestCount {
+				debitAccount := createAccountThroughAPI("LIABILITY")
+				creditAccount := createAccountThroughAPI("ASSET")
+				entries := make([]requestEntry, 0, entriesPerRequest)
+				for position := range entriesPerRequest {
+					accountID, direction := debitAccount, "DEBIT"
+					if position%2 != 0 {
+						accountID, direction = creditAccount, "CREDIT"
+					}
+					entries = append(entries, requestEntry{
+						AccountID: accountID, Direction: direction, Amount: 1, Currency: "BRL",
+					})
+				}
+				body, err := json.Marshal(transactionRequest{
+					IdempotencyKey: uuid.NewString(), Operation: "TRANSFER", Amount: entriesPerRequest / 2,
+					Entries: entries,
+				})
+				Expect(err).NotTo(HaveOccurred())
+				requests[requestIndex] = string(body)
+			}
+
+			// Act: exercise the HTTP handler and transaction path concurrently.
+			results := make(chan result, requestCount)
+			var waitGroup sync.WaitGroup
+			for _, body := range requests {
+				waitGroup.Add(1)
+				go func(body string) {
+					defer waitGroup.Done()
+					started := time.Now()
+					results <- result{response: callAPI(http.MethodPost, "/transactions", body, ""), elapsed: time.Since(started)}
+				}(body)
+			}
+			waitGroup.Wait()
+			close(results)
+
+			// Assert: all requests commit all entries and retain the full event payload.
+			for completed := range results {
+				Expect(completed.response.Code).To(Equal(http.StatusCreated), completed.response.Body.String())
+				var response struct {
+					TransactionID string `json:"transaction_id"`
+				}
+				Expect(json.Unmarshal(completed.response.Body.Bytes(), &response)).To(Succeed())
+				var entryCount int
+				var eventPayload []byte
+				Expect(postgresPool.Pool().QueryRow(ctx, `
+					SELECT (SELECT count(*) FROM entries WHERE transaction_id = $1), payload
+					FROM outbox_events WHERE aggregate_id = $1`, response.TransactionID).Scan(&entryCount, &eventPayload)).To(Succeed())
+				Expect(entryCount).To(Equal(entriesPerRequest))
+				Expect(len(eventPayload)).To(BeNumerically("<", 1<<20), "event must fit within the default 1 MiB NATS payload limit")
+				var event struct {
+					Entries []json.RawMessage `json:"entries"`
+				}
+				Expect(json.Unmarshal(eventPayload, &event)).To(Succeed())
+				Expect(event.Entries).To(HaveLen(entriesPerRequest))
+				Expect(completed.elapsed).To(BeNumerically("<", 10*time.Second))
+			}
+		})
+
 		It("should create accounts and persist a transaction through the HTTP endpoints", func() {
 			// Arrange
 			debitAccount := createAccountThroughAPI("LIABILITY")

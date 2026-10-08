@@ -20,6 +20,7 @@ func NewCreateTransactionFactory(
 		baseDeps.Tracer,
 		baseDeps.Log,
 		baseDeps.Prom,
+		baseDeps.Cfg.Transaction.MaxEntries,
 	)
 
 	createTransactionHandler := handler.NewCreateTransactionHandler(transactionCommand, baseDeps.Log, baseDeps.Tracer)

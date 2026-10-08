@@ -56,6 +56,76 @@ var _ = Describe("CreateTransaction", func() {
 		Expect(event.EventID).NotTo(BeEmpty())
 		Expect(event.Status).To(Equal(string(transaction.Completed)))
 		Expect(event.Metadata).To(Equal(input.Metadata))
+		Expect(event.Entries).To(HaveLen(len(transactions.saved.Entries)))
+		for position, entry := range transactions.saved.Entries {
+			Expect(event.Entries[position]).To(Equal(transaction.TransactionEntryCreated{
+				Position:  int64(position),
+				AccountID: entry.AccountID,
+				Direction: entry.Direction,
+				Amount:    entry.Amount.Amount(),
+				Currency:  string(entry.Amount.Currency()),
+			}))
+		}
+	})
+
+	It("creates an ordered multi-entry transaction with each distinct account loaded once", func() {
+		input := validInput()
+		input.DebitAccountID = nil
+		input.CreditAccountID = nil
+		input.Currency = nil
+		input.Entries = []dto.EntryInput{
+			{AccountID: debitExternalID, Direction: string(transaction.Debit), Amount: 150000, Currency: string(money.BRL)},
+			{AccountID: creditExternalID, Direction: string(transaction.Credit), Amount: 100000, Currency: string(money.BRL)},
+			{AccountID: creditExternalID, Direction: string(transaction.Credit), Amount: 50000, Currency: string(money.BRL)},
+		}
+		accounts := newAccountRepository()
+		transactions := &transactionRepository{}
+		outboxes := &outboxRepository{}
+		sut := newCommand(accounts, transactions, outboxes, &unitOfWork{})
+
+		result, err := sut.Execute(context.Background(), input)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.IdempotentReplay).To(BeFalse())
+		Expect(transactions.saved.Entries).To(HaveLen(3))
+		Expect(accounts.findCalls).To(Equal([]string{creditExternalID, debitExternalID}))
+		Expect(transactions.saved.Entries[0].AccountID).To(Equal(accounts.accounts[debitExternalID].ID.String()))
+		Expect(transactions.saved.Entries[1].AccountID).To(Equal(accounts.accounts[creditExternalID].ID.String()))
+		Expect(transactions.saved.Entries[2].AccountID).To(Equal(accounts.accounts[creditExternalID].ID.String()))
+		Expect(transactions.saved.Entries[0].TransactionPosition).To(Equal(int64(0)))
+		Expect(transactions.saved.Entries[1].TransactionPosition).To(Equal(int64(1)))
+		Expect(transactions.saved.Entries[2].TransactionPosition).To(Equal(int64(2)))
+		Expect(transactions.saved.Entries[1].SequenceNumber).To(Equal(int64(1)))
+		Expect(transactions.saved.Entries[2].SequenceNumber).To(Equal(int64(2)))
+		Expect(outboxes.saved).NotTo(BeNil())
+		Expect(string(outboxes.saved.Payload)).NotTo(ContainSubstring("debit_account_id"))
+		Expect(string(outboxes.saved.Payload)).NotTo(ContainSubstring("credit_account_id"))
+	})
+
+	It("rejects a composition above the configured entry limit before opening the unit of work", func() {
+		input := validInput()
+		input.DebitAccountID = nil
+		input.CreditAccountID = nil
+		input.Currency = nil
+		input.Entries = []dto.EntryInput{
+			{AccountID: debitExternalID, Direction: string(transaction.Debit), Amount: 150000, Currency: string(money.BRL)},
+			{AccountID: creditExternalID, Direction: string(transaction.Credit), Amount: 100000, Currency: string(money.BRL)},
+			{AccountID: creditExternalID, Direction: string(transaction.Credit), Amount: 50000, Currency: string(money.BRL)},
+		}
+		accounts := newAccountRepository()
+		transactions := &transactionRepository{}
+		outboxes := &outboxRepository{}
+		uow := &observingUnitOfWork{}
+		sut := newCommandWithLimit(accounts, transactions, outboxes, uow, 2)
+
+		result, err := sut.Execute(context.Background(), input)
+
+		Expect(result).To(BeNil())
+		Expect(err).To(HaveOccurred())
+		Expect(uow.calls).To(BeZero())
+		Expect(accounts.findCalls).To(BeEmpty())
+		Expect(transactions.saved).To(BeNil())
+		Expect(outboxes.saved).To(BeNil())
 	})
 
 	It("rejects a missing account without persisting anything", func() {
@@ -66,6 +136,22 @@ var _ = Describe("CreateTransaction", func() {
 		sut := newCommand(accounts, transactions, outboxes, &unitOfWork{})
 
 		result, err := sut.Execute(context.Background(), validInput())
+
+		Expect(result).To(BeNil())
+		Expect(err).To(HaveOccurred())
+		Expect(transactions.saved).To(BeNil())
+		Expect(outboxes.saved).To(BeNil())
+	})
+
+	It("rejects an account whose currency differs from its requested entry", func() {
+		input := validInput()
+		accounts := newAccountRepository()
+		accounts.accounts[creditExternalID].Currency = money.USD
+		transactions := &transactionRepository{}
+		outboxes := &outboxRepository{}
+		sut := newCommand(accounts, transactions, outboxes, &unitOfWork{})
+
+		result, err := sut.Execute(context.Background(), input)
 
 		Expect(result).To(BeNil())
 		Expect(err).To(HaveOccurred())
@@ -249,6 +335,20 @@ func (u *unitOfWork) WithRetryableTransaction(ctx context.Context, fn func(conte
 	return fn(ctx)
 }
 
+type observingUnitOfWork struct {
+	calls int
+}
+
+func (u *observingUnitOfWork) WithTransaction(ctx context.Context, fn func(context.Context) error) error {
+	u.calls++
+	return fn(ctx)
+}
+
+func (u *observingUnitOfWork) WithRetryableTransaction(ctx context.Context, fn func(context.Context) error) error {
+	u.calls++
+	return fn(ctx)
+}
+
 type retryingUnitOfWork struct{}
 
 func (u *retryingUnitOfWork) WithTransaction(ctx context.Context, fn func(context.Context) error) error {
@@ -270,10 +370,12 @@ type accountRepository struct {
 func newAccountRepository() *accountRepository {
 	debitID, _ := entity.NewID("019ff448-c43d-70d3-83c7-dfa0674469b7")
 	creditID, _ := entity.NewID("019ff448-c43d-70d3-83c7-dfa0674469b8")
-	return &accountRepository{accounts: map[string]*account.Account{
-		debitExternalID:  {ID: debitID, AccountExternalID: debitExternalID, Status: account.StatusActive, Currency: money.BRL},
-		creditExternalID: {ID: creditID, AccountExternalID: creditExternalID, Status: account.StatusActive, Currency: money.BRL},
-	}}
+	return &accountRepository{
+		accounts: map[string]*account.Account{
+			debitExternalID:  {ID: debitID, AccountExternalID: debitExternalID, Status: account.StatusActive, AccountType: account.Liability, BalancePolicy: account.BalanceUnrestricted, Currency: money.BRL},
+			creditExternalID: {ID: creditID, AccountExternalID: creditExternalID, Status: account.StatusActive, AccountType: account.Asset, BalancePolicy: account.BalanceUnrestricted, Currency: money.BRL},
+		},
+	}
 }
 
 func (r *accountRepository) Save(context.Context, *account.Account) error { return nil }
@@ -295,6 +397,7 @@ type transactionRepository struct {
 	saveErrors     []error
 	saveCalls      int
 	attempts       []*transaction.Transaction
+	ledgerStates   map[string]account.LedgerState
 }
 
 func (r *transactionRepository) Save(_ context.Context, value *transaction.Transaction) error {
@@ -325,6 +428,11 @@ func (r *transactionRepository) ExistsByIdempotencyKey(context.Context, string) 
 	return r.existing != nil, nil
 }
 
+func (r *transactionRepository) FindLatestLedgerState(_ context.Context, accountID string) (int64, int64, error) {
+	state := r.ledgerStates[accountID]
+	return state.SequenceNumber, state.RunningBalance, nil
+}
+
 type outboxRepository struct {
 	saved   *outbox.Outbox
 	saveErr error
@@ -351,11 +459,15 @@ func (r *outboxRepository) UpdateOutboxData(context.Context, entity.ID, outbox.U
 }
 
 func newCommand(accounts *accountRepository, transactions *transactionRepository, outboxes *outboxRepository, uow application.UnitOfWork, metrics ...*testMetrics) *command.CreateTransaction {
+	return newCommandWithLimit(accounts, transactions, outboxes, uow, application.DefaultMaxTransactionEntries, metrics...)
+}
+
+func newCommandWithLimit(accounts *accountRepository, transactions *transactionRepository, outboxes *outboxRepository, uow application.UnitOfWork, maxEntries int, metrics ...*testMetrics) *command.CreateTransaction {
 	var recorder application.Metrics = newTestMetrics()
 	if len(metrics) > 0 {
 		recorder = metrics[0]
 	}
-	return command.NewCreateTransaction(uow, accounts, transactions, outboxes, testTracer{}, testLogger{}, recorder)
+	return command.NewCreateTransaction(uow, accounts, transactions, outboxes, testTracer{}, testLogger{}, recorder, maxEntries)
 }
 
 type testTracer struct{}

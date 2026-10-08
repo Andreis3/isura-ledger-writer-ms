@@ -21,6 +21,7 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: UNIT OF WORK", func() {
 			outboxRepo := repository.NewOutBoxRepository(pool)
 			txContext := database.WithTx(ctx, tx)
 
+			Expect(prepareTransactionLedger(ctx, txContext, entityTransaction, pool)).To(Succeed())
 			Expect(transactionRepo.Save(txContext, entityTransaction)).To(Succeed())
 			Expect(outboxRepo.Save(txContext, newOutbox(entityTransaction.ID.String()))).To(Succeed())
 
@@ -42,6 +43,9 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: UNIT OF WORK", func() {
 
 			committed := newTransaction(accountA, accountB)
 			err := unitOfWork.WithTransaction(ctx, func(txCtx context.Context) error {
+				if err := prepareTransactionLedger(ctx, txCtx, committed, pool); err != nil {
+					return err
+				}
 				if err := transactionRepo.Save(txCtx, committed); err != nil {
 					return err
 				}
@@ -54,6 +58,9 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: UNIT OF WORK", func() {
 			rolledBack := newTransaction(accountA, accountB)
 			expectedFailure := errors.New("force atomic rollback")
 			err = unitOfWork.WithTransaction(ctx, func(txCtx context.Context) error {
+				if err := prepareTransactionLedger(ctx, txCtx, rolledBack, pool); err != nil {
+					return err
+				}
 				if err := transactionRepo.Save(txCtx, rolledBack); err != nil {
 					return err
 				}
@@ -70,6 +77,7 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: UNIT OF WORK", func() {
 			accountA, accountB := insertAccounts(ctx, tx)
 			entityTransaction := newTransaction(accountA, accountB)
 			txContext := database.WithTx(ctx, tx)
+			Expect(prepareTransactionLedger(ctx, txContext, entityTransaction, pool)).To(Succeed())
 			Expect(repository.NewTransactionRepository(pool).Save(txContext, entityTransaction)).To(Succeed())
 			Expect(repository.NewOutBoxRepository(pool).Save(txContext, newOutbox(entityTransaction.ID.String()))).To(Succeed())
 			Expect(tx.Rollback(ctx)).To(Succeed())

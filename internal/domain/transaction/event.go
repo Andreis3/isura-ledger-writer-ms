@@ -5,16 +5,26 @@ import (
 )
 
 type TransactionCreated struct {
-	EventID         string            `json:"event_id"`
-	TransactionID   string            `json:"transaction_id"`
-	IdempotencyKey  string            `json:"idempotency_key"`
-	DebitAccountID  string            `json:"debit_account_id"`
-	CreditAccountID string            `json:"credit_account_id"`
-	Amount          int64             `json:"amount"`
-	Currency        string            `json:"currency"`
-	Status          string            `json:"status"`
-	OccurredAt      time.Time         `json:"occurred_at"`
-	Metadata        map[string]string `json:"metadata,omitempty"`
+	EventID         string                    `json:"event_id"`
+	TransactionID   string                    `json:"transaction_id"`
+	IdempotencyKey  string                    `json:"idempotency_key"`
+	DebitAccountID  string                    `json:"debit_account_id,omitempty"`
+	CreditAccountID string                    `json:"credit_account_id,omitempty"`
+	Amount          int64                     `json:"amount"`
+	Currency        string                    `json:"currency"`
+	Status          string                    `json:"status"`
+	OccurredAt      time.Time                 `json:"occurred_at"`
+	Metadata        map[string]string         `json:"metadata,omitempty"`
+	Entries         []TransactionEntryCreated `json:"entries"`
+}
+
+// TransactionEntryCreated is one ordered posting included in a created transaction event.
+type TransactionEntryCreated struct {
+	Position  int64     `json:"position"`
+	AccountID string    `json:"account_id"`
+	Direction Direction `json:"direction"`
+	Amount    int64     `json:"amount"`
+	Currency  string    `json:"currency"`
 }
 
 func NewTransactionCreated() *TransactionCreated {
@@ -73,6 +83,12 @@ func (t *TransactionCreated) WithMetadata(metadata map[string]string) *Transacti
 	return t
 }
 
+// WithEntries stores a copy of the ordered transaction composition.
+func (t *TransactionCreated) WithEntries(entries []TransactionEntryCreated) *TransactionCreated {
+	t.Entries = append([]TransactionEntryCreated(nil), entries...)
+	return t
+}
+
 func (t *TransactionCreated) Build() *TransactionCreated {
 	return &TransactionCreated{
 		EventID:         t.EventID,
@@ -85,10 +101,22 @@ func (t *TransactionCreated) Build() *TransactionCreated {
 		Status:          t.Status,
 		OccurredAt:      t.OccurredAt,
 		Metadata:        cloneMetadata(t.Metadata),
+		Entries:         append([]TransactionEntryCreated(nil), t.Entries...),
 	}
 }
 
 func TransactionCreatedFacade(entityTransaction Transaction, idempotencyKey string, debitAccountID string, creditAccountID string) *TransactionCreated {
+	entries := make([]TransactionEntryCreated, 0, len(entityTransaction.Entries))
+	for _, entry := range entityTransaction.Entries {
+		entries = append(entries, TransactionEntryCreated{
+			Position:  entry.TransactionPosition,
+			AccountID: entry.AccountID,
+			Direction: entry.Direction,
+			Amount:    entry.Amount.Amount(),
+			Currency:  string(entry.Amount.Currency()),
+		})
+	}
+
 	return NewTransactionCreated().
 		WithTransactionID(entityTransaction.ID.String()).
 		WithIdempotencyKey(idempotencyKey).
@@ -99,5 +127,6 @@ func TransactionCreatedFacade(entityTransaction Transaction, idempotencyKey stri
 		WithStatus(string(entityTransaction.Status)).
 		WithOccurredAt(time.Now()).
 		WithMetadata(entityTransaction.Metadata).
+		WithEntries(entries).
 		Build()
 }

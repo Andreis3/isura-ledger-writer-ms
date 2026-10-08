@@ -32,7 +32,7 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: HISTORICAL BALANCE BACKFIL
 					VALUES ($1, $2, $3, 'PENDING', 'TRANSFER', 100, 'BRL', $4, $4)`,
 				transactionID, uuid.NewString(), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", now)
 			Expect(err).NotTo(HaveOccurred())
-			for _, entry := range []struct {
+			for position, entry := range []struct {
 				id, direction                    string
 				sequence, amount, runningBalance int64
 			}{
@@ -40,9 +40,9 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: HISTORICAL BALANCE BACKFIL
 				{id: newIDV7(), direction: "CREDIT", sequence: 2, amount: 40, runningBalance: -60},
 			} {
 				_, err = tx.Exec(ctx, `
-						INSERT INTO entries (id, account_id, transaction_id, sequence_number, direction, amount, running_balance, currency, created_at)
-						VALUES ($1, $2, $3, $4, $5, $6, $7, 'BRL', $8)`,
-					entry.id, accountID, transactionID, entry.sequence, entry.direction, entry.amount, entry.runningBalance, now)
+						INSERT INTO entries (id, account_id, transaction_id, sequence_number, transaction_position, direction, amount, running_balance, currency, created_at)
+						VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'BRL', $9)`,
+					entry.id, accountID, transactionID, entry.sequence, position, entry.direction, entry.amount, entry.runningBalance, now)
 				Expect(err).NotTo(HaveOccurred())
 			}
 

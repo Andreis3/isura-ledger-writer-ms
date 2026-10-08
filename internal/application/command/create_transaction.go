@@ -10,9 +10,9 @@ import (
 
 	"github.com/andreis3/isura-ledger-ms/internal/application"
 	"github.com/andreis3/isura-ledger-ms/internal/application/dto"
+	"github.com/andreis3/isura-ledger-ms/internal/application/service"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/account"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/fault"
-	"github.com/andreis3/isura-ledger-ms/internal/domain/money"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/outbox"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/transaction"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/postgres/repository/criteria"
@@ -29,6 +29,7 @@ type CreateTransaction struct {
 	tracer                application.Tracer
 	log                   application.Logger
 	metrics               application.Metrics
+	maxEntries            int
 }
 
 func NewCreateTransaction(
@@ -39,7 +40,11 @@ func NewCreateTransaction(
 	tracer application.Tracer,
 	log application.Logger,
 	metrics application.Metrics,
+	maxEntries int,
 ) *CreateTransaction {
+	if maxEntries <= 0 {
+		maxEntries = application.DefaultMaxTransactionEntries
+	}
 	return &CreateTransaction{
 		uow:                   uow,
 		accountRepository:     accountRepository,
@@ -48,6 +53,7 @@ func NewCreateTransaction(
 		tracer:                tracer,
 		log:                   log,
 		metrics:               metrics,
+		maxEntries:            maxEntries,
 	}
 }
 
@@ -58,6 +64,12 @@ func (c *CreateTransaction) Execute(ctx context.Context, input dto.CreateTransac
 	defer func() {
 		c.metrics.RecordCommandDuration(createTransactionCommand, float64(time.Since(start).Milliseconds()))
 	}()
+	if requestedEntryCount(input) > c.maxEntries {
+		err := fault.InvalidEntityError(transaction.ErrInvalidMaxEntries, map[string]any{
+			"entries": "maximum entries exceeded",
+		})
+		return c.fail(span, err, "invalid input")
+	}
 
 	validatedTransaction, err := input.CreateTransactionFacade()
 	if err != nil {
@@ -68,56 +80,9 @@ func (c *CreateTransaction) Execute(ctx context.Context, input dto.CreateTransac
 	var output *dto.CreateTransactionOutput
 	err = c.uow.WithRetryableTransaction(ctx, func(txCtx context.Context) error {
 		output = nil
-		// Rebuild the aggregate on every attempt so retries discard transient
-		// state from the previous attempt and recalculate from fresh persisted state.
-		entityTransaction, err := input.CreateTransactionFacade()
-		if err != nil {
-			return err
-		}
-
-		existing, err := c.findByIdempotencyKey(txCtx, input.IdempotencyKey)
-		if err != nil {
-			return err
-		}
-		if existing != nil {
-			if existing.Fingerprint != requestFingerprint {
-				c.metrics.RecordIdempotencyTotal("conflict")
-				return fault.IdempotencyConflictError(errors.New("idempotency fingerprint mismatch"))
-			}
-			output = replayOutput(existing)
-			return nil
-		}
-
-		debitAccount, creditAccount, err := c.loadAccounts(txCtx, input.DebitAccountID, input.CreditAccountID)
-		if err != nil {
-			return err
-		}
-		if err := validateAccounts(debitAccount, creditAccount, entityTransaction.Amount.Currency()); err != nil {
-			return err
-		}
-		if debitAccount.ID == creditAccount.ID {
-			return fault.InvalidTransferError(transaction.ErrSameAccountTransfer)
-		}
-
-		assignEntryReferences(entityTransaction, debitAccount, creditAccount)
-		if err := entityTransaction.Complete(); err != nil {
-			return err
-		}
-		sortEntries(entityTransaction)
-
-		if err := c.transactionRepository.Save(txCtx, entityTransaction); err != nil {
-			return err
-		}
-		if err := c.saveCreatedEvent(txCtx, entityTransaction, input); err != nil {
-			return err
-		}
-
-		output = &dto.CreateTransactionOutput{
-			TransactionID:    new(entityTransaction.ID.String()),
-			Status:           string(entityTransaction.Status),
-			IdempotentReplay: false,
-		}
-		return nil
+		var attemptErr error
+		output, attemptErr = c.executeWithinTransaction(txCtx, input, requestFingerprint)
+		return attemptErr
 	})
 	if err != nil {
 		replay, replayErr := c.replayAfterIdempotencyRace(ctx, input, requestFingerprint, err)
@@ -138,6 +103,91 @@ func (c *CreateTransaction) Execute(ctx context.Context, input dto.CreateTransac
 	c.metrics.RecordCommandTotal(createTransactionCommand, commandState(output))
 	c.log.InfoJSON("CreateTransaction completed", slog.String("trace_id", span.SpanContext().TraceID()), slog.Bool("idempotent_replay", output.IdempotentReplay))
 	return output, nil
+}
+
+func (c *CreateTransaction) executeWithinTransaction(
+	ctx context.Context,
+	input dto.CreateTransactionInput,
+	fingerprint string,
+) (*dto.CreateTransactionOutput, error) {
+	// Rebuild on every attempt so retries recalculate from fresh persisted state.
+	entityTransaction, err := input.CreateTransactionFacade()
+	if err != nil {
+		return nil, err
+	}
+	existing, err := c.findByIdempotencyKey(ctx, input.IdempotencyKey)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		if existing.Fingerprint != fingerprint {
+			c.metrics.RecordIdempotencyTotal("conflict")
+			return nil, fault.IdempotencyConflictError(errors.New("idempotency fingerprint mismatch"))
+		}
+		return replayOutput(existing), nil
+	}
+	if err := c.persistNewTransaction(ctx, input, entityTransaction); err != nil {
+		return nil, err
+	}
+	return &dto.CreateTransactionOutput{
+		TransactionID:    new(entityTransaction.ID.String()),
+		Status:           string(entityTransaction.Status),
+		IdempotentReplay: false,
+	}, nil
+}
+
+func (c *CreateTransaction) persistNewTransaction(
+	ctx context.Context,
+	input dto.CreateTransactionInput,
+	entityTransaction *transaction.Transaction,
+) error {
+	accountsByExternalID, accounts, err := c.loadAccounts(ctx, entityTransaction.Entries)
+	if err != nil {
+		return err
+	}
+	if err := validateEntryAccounts(entityTransaction.Entries, accountsByExternalID); err != nil {
+		return err
+	}
+	if input.Entries == nil {
+		debitAccount := accountsByExternalID[debitAccountID(input)]
+		creditAccount := accountsByExternalID[creditAccountID(input)]
+		if debitAccount.ID == creditAccount.ID {
+			return fault.InvalidTransferError(transaction.ErrSameAccountTransfer)
+		}
+	}
+
+	assignEntryReferences(entityTransaction, accountsByExternalID)
+	if err := service.AssignLedgerEntries(ctx, c.transactionRepository, entityTransaction, accounts...); err != nil {
+		return err
+	}
+	if err := entityTransaction.Complete(); err != nil {
+		return err
+	}
+	if err := c.transactionRepository.Save(ctx, entityTransaction); err != nil {
+		return err
+	}
+	return c.saveCreatedEvent(ctx, entityTransaction, input)
+}
+
+func requestedEntryCount(input dto.CreateTransactionInput) int {
+	if input.Entries == nil {
+		return 2
+	}
+	return len(input.Entries)
+}
+
+func debitAccountID(input dto.CreateTransactionInput) string {
+	if input.DebitAccountID == nil {
+		return ""
+	}
+	return *input.DebitAccountID
+}
+
+func creditAccountID(input dto.CreateTransactionInput) string {
+	if input.CreditAccountID == nil {
+		return ""
+	}
+	return *input.CreditAccountID
 }
 
 func (c *CreateTransaction) replayAfterIdempotencyRace(
@@ -184,62 +234,54 @@ func (c *CreateTransaction) findByIdempotencyKey(ctx context.Context, key *strin
 	return existing, nil
 }
 
-func (c *CreateTransaction) loadAccounts(ctx context.Context, debitID, creditID *string) (*account.Account, *account.Account, error) {
-	firstID, secondID := debitID, creditID
-	if *firstID > *secondID {
-		firstID, secondID = secondID, firstID
+func (c *CreateTransaction) loadAccounts(ctx context.Context, entries []*transaction.Entry) (map[string]*account.Account, []*account.Account, error) {
+	externalIDs := make([]string, 0, len(entries))
+	seen := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		if _, exists := seen[entry.AccountExternalID]; exists {
+			continue
+		}
+		seen[entry.AccountExternalID] = struct{}{}
+		externalIDs = append(externalIDs, entry.AccountExternalID)
 	}
+	sort.Strings(externalIDs)
 
-	first, err := c.accountRepository.FindAccount(ctx, criteria.AccountCriteria{
-		AccountExternalID: firstID,
-	})
-	if err != nil {
-		return nil, nil, err
-	}
-	second := first
-	if *secondID != *firstID {
-		second, err = c.accountRepository.FindAccount(ctx, criteria.AccountCriteria{
-			AccountExternalID: secondID,
-		})
+	accountsByExternalID := make(map[string]*account.Account, len(externalIDs))
+	accounts := make([]*account.Account, 0, len(externalIDs))
+	for _, externalID := range externalIDs {
+		loaded, err := c.accountRepository.FindAccount(ctx, criteria.AccountCriteria{AccountExternalID: &externalID})
 		if err != nil {
 			return nil, nil, err
 		}
+		if loaded == nil {
+			return nil, nil, fault.FindAccountNotFoundError(account.ErrAccountNotFound)
+		}
+		accountsByExternalID[externalID] = loaded
+		accounts = append(accounts, loaded)
 	}
-	if first == nil || second == nil {
-		return nil, nil, fault.FindAccountNotFoundError(account.ErrAccountNotFound)
-	}
-
-	if first.AccountExternalID == *debitID {
-		return first, second, nil
-	}
-	return second, first, nil
+	return accountsByExternalID, accounts, nil
 }
 
-func validateAccounts(debit, credit *account.Account, currency money.Currency) error {
-	if debit.Status != account.StatusActive || credit.Status != account.StatusActive {
-		return fault.FindAccountNotFoundError(account.ErrAccountNotFound)
-	}
-	if debit.Currency.Mismatch(currency) || credit.Currency.Mismatch(currency) {
-		return fault.ErrCurrencyMismatch(errors.New("account currency does not match transaction currency"))
+func validateEntryAccounts(entries []*transaction.Entry, accountsByExternalID map[string]*account.Account) error {
+	for _, entry := range entries {
+		loaded, exists := accountsByExternalID[entry.AccountExternalID]
+		if !exists || loaded.Status != account.StatusActive {
+			return fault.FindAccountNotFoundError(account.ErrAccountNotFound)
+		}
+		if loaded.Currency.Mismatch(entry.Amount.Currency()) {
+			return fault.ErrCurrencyMismatch(errors.New("account currency does not match entry currency"))
+		}
 	}
 	return nil
 }
 
-func assignEntryReferences(entityTransaction *transaction.Transaction, debit, credit *account.Account) {
+func assignEntryReferences(entityTransaction *transaction.Transaction, accountsByExternalID map[string]*account.Account) {
 	for _, entry := range entityTransaction.Entries {
 		entry.AssignTransactionID(entityTransaction.ID.String())
-		if entry.Direction == transaction.Debit {
-			entry.AssignAccountID(debit.ID.String())
-			continue
+		if loaded, exists := accountsByExternalID[entry.AccountExternalID]; exists {
+			entry.AssignAccountID(loaded.ID.String())
 		}
-		entry.AssignAccountID(credit.ID.String())
 	}
-}
-
-func sortEntries(entityTransaction *transaction.Transaction) {
-	sort.SliceStable(entityTransaction.Entries, func(i, j int) bool {
-		return entityTransaction.Entries[i].AccountID < entityTransaction.Entries[j].AccountID
-	})
 }
 
 func replayOutput(existing *transaction.Transaction) *dto.CreateTransactionOutput {
@@ -259,8 +301,8 @@ func (c *CreateTransaction) saveCreatedEvent(ctx context.Context, entityTransact
 	event := transaction.TransactionCreatedFacade(
 		*entityTransaction,
 		*input.IdempotencyKey,
-		*input.DebitAccountID,
-		*input.CreditAccountID,
+		debitAccountID(input),
+		creditAccountID(input),
 	)
 	event.WithEventID(newOutbox.ID.String())
 	newOutbox.Payload, err = json.Marshal(event)

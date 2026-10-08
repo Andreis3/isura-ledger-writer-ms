@@ -73,9 +73,12 @@ paths:
 
   /transactions:
     post:
-      summary: Cria uma transação (Partidas Dobradas)
+      summary: Cria uma transação contábil com um ou mais débitos e créditos
       description: |
-        Confirma uma transferência balanceada com persistência transacional e idempotência.
+        Cria uma operação contábil balanceada com persistência transacional e idempotência.
+        É possível enviar vários lançamentos em `entries`, inclusive para a mesma conta;
+        a ordem do array é preservada. Todos devem usar a mesma moeda e a soma dos débitos
+        e dos créditos deve ser igual ao valor raiz `amount`.
         A chave canônica fica no corpo; `Idempotency-Key` é um alias compatível quando o corpo não a informa.
       operationId: createTransaction
       tags:
@@ -95,23 +98,58 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/CreateTransactionRequest'
+            examples:
+              legacyTransfer:
+                summary: Formato legado para uma transferência com dois lançamentos
+                value:
+                  idempotency_key: transfer-20260918-0001
+                  debit_account_id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                  credit_account_id: 7b0c4a39-3667-4f7c-9b11-bc98a3ee7c34
+                  amount: 150000
+                  currency: BRL
+                  operation: TRANSFER
+              tedWithFee:
+                summary: TED com tarifa cobrada além do valor transferido
+                description: >
+                  O cliente paga 150000 pela TED e 1000 de tarifa. A raiz amount soma os dois
+                  lados (151000). Em operações com entries, não envie debit_account_id nem
+                  credit_account_id na raiz.
+                value:
+                  idempotency_key: ted-20260918-0001
+                  amount: 151000
+                  operation: TED_OUT
+                  entries:
+                    - account_id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                      direction: DEBIT
+                      amount: 150000
+                      currency: BRL
+                    - account_id: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+                      direction: DEBIT
+                      amount: 1000
+                      currency: BRL
+                    - account_id: 7b0c4a39-3667-4f7c-9b11-bc98a3ee7c34
+                      direction: CREDIT
+                      amount: 150000
+                      currency: BRL
+                    - account_id: c04f3b45-3b26-4bc5-a3a5-29a3178fd279
+                      direction: CREDIT
+                      amount: 1000
+                      currency: BRL
       responses:
         '201':
-          description: Nova transferência confirmada e evento gravado na outbox.
+          description: Nova transação criada integralmente e evento gravado na outbox.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/TransactionResponse'
         '200':
-          description: Replay idempotente da mesma transferência.
+          description: Replay idempotente da mesma transação.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/TransactionResponse'
         '400':
-          description: >
-            Erro de validação. Transferências em que débito e crédito apontam para a mesma conta
-            retornam o código ILMS-1006 e a mensagem "Debit and credit accounts must be different.".
+          description: Erro de validação da composição, dos campos ou das regras do ledger.
           content:
             application/json:
               schema:
@@ -238,11 +276,20 @@ components:
       type: object
       required:
         - idempotency_key
-        - debit_account_id
-        - credit_account_id
         - amount
-        - currency
         - operation
+      description: >
+        Envie o formato legado (debit_account_id, credit_account_id e currency) ou entries.
+        No formato entries, amount é obrigatório na raiz e deve ser igual à soma dos débitos
+        e à soma dos créditos. Todos os lançamentos devem usar a mesma moeda.
+      oneOf:
+        - required: [debit_account_id, credit_account_id, currency]
+        - required: [entries]
+          not:
+            anyOf:
+              - required: [debit_account_id]
+              - required: [credit_account_id]
+              - required: [currency]
       properties:
         idempotency_key:
           type: string
@@ -258,14 +305,42 @@ components:
           type: integer
           format: int64
           minimum: 1
-          description: Valor em centavos.
+          description: >
+            Valor em centavos. No formato entries, é o total da operação e deve coincidir com
+            a soma dos débitos e com a soma dos créditos.
           example: 150000
         currency:
           type: string
           enum: [BRL, USD, EUR]
+          description: Obrigatório somente no formato legado.
+        entries:
+          type: array
+          minItems: 2
+          description: Lançamentos ordenados; todos devem usar a mesma moeda.
+          items:
+            type: object
+            required: [account_id, direction, amount, currency]
+            properties:
+              account_id:
+                type: string
+                format: uuid
+              direction:
+                type: string
+                enum: [DEBIT, CREDIT]
+              amount:
+                type: integer
+                format: int64
+                minimum: 1
+              currency:
+                type: string
+                enum: [BRL, USD, EUR]
+              metadata:
+                type: object
+                additionalProperties:
+                  type: string
         operation:
           type: string
-          enum: [TRANSFER]
+          enum: [PIX_IN, PIX_OUT, TED_IN, TED_OUT, TRANSFER, DEPOSIT, WITHDRAWAL, FEE, REFUND]
         metadata:
           type: object
           maxProperties: 32

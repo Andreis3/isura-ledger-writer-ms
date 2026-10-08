@@ -4,6 +4,7 @@ package nats_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -25,6 +26,63 @@ const relaySubject = "ledger.transaction.created"
 var _ = Describe("INTEGRATION :: INFRA :: NATS :: OUTBOX RELAY", func() {
 	Describe("#Run", func() {
 		Context("success cases", func() {
+			It("should publish a 100-entry transaction event within the JetStream payload limit", func() {
+				// Arrange (Given)
+				ctx := context.Background()
+				container, js, closeJetStream, err := startJetStream(ctx)
+				Expect(err).NotTo(HaveOccurred())
+				DeferCleanup(func() { Expect(testcontainers.TerminateContainer(container)).To(Succeed()) })
+				DeferCleanup(closeJetStream)
+
+				type eventEntry struct {
+					Position  int    `json:"position"`
+					AccountID string `json:"account_id"`
+					Direction string `json:"direction"`
+					Amount    int    `json:"amount"`
+					Currency  string `json:"currency"`
+				}
+				entries := make([]eventEntry, 100)
+				for position := range entries {
+					direction := "DEBIT"
+					if position%2 != 0 {
+						direction = "CREDIT"
+					}
+					entries[position] = eventEntry{
+						Position: position, AccountID: fmt.Sprintf("account-%d", position%2),
+						Direction: direction, Amount: 1, Currency: "BRL",
+					}
+				}
+				payload, err := json.Marshal(map[string]any{
+					"event_id": "event-100-entries", "transaction_id": "transaction-100-entries",
+					"idempotency_key": "idempotency-100-entries", "amount": 50, "currency": "BRL",
+					"status": "COMPLETED", "entries": entries,
+				})
+				Expect(err).NotTo(HaveOccurred())
+				Expect(len(payload)).To(BeNumerically("<", 1<<20))
+				item, err := outbox.NewOutbox("transaction-100-entries", payload)
+				Expect(err).NotTo(HaveOccurred())
+				repo := &integrationRepository{items: []*outbox.Outbox{item}, updatedCh: make(chan outbox.UpdateOutboxData, 1)}
+				relay := newIntegrationRelay(repo, js)
+
+				// Act (When)
+				Expect(relay.PublishBatch(ctx)).To(Succeed())
+				consumer, err := js.CreateOrUpdateConsumer(ctx, relayStreamName(), jetstream.ConsumerConfig{
+					FilterSubject: relaySubject, AckPolicy: jetstream.AckExplicitPolicy,
+				})
+				Expect(err).NotTo(HaveOccurred())
+				message, err := consumer.Next(jetstream.FetchMaxWait(time.Second))
+				Expect(err).NotTo(HaveOccurred())
+
+				// Assert (Then)
+				Expect(string(message.Data())).To(Equal(string(payload)))
+				var received struct {
+					Entries []eventEntry `json:"entries"`
+				}
+				Expect(json.Unmarshal(message.Data(), &received)).To(Succeed())
+				Expect(received.Entries).To(HaveLen(100))
+				Expect(message.Ack()).To(Succeed())
+			})
+
 			It("should publish an outbox event to JetStream and mark it successful", func() {
 				// Arrange (Given)
 				ctx := context.Background()

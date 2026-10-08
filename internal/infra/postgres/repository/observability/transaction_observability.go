@@ -68,6 +68,23 @@ func (r *ObservabilityTransactionRepo) Find(ctx context.Context, params transact
 	return transactionResponse, nil
 }
 
+func (r *ObservabilityTransactionRepo) FindLatestLedgerState(ctx context.Context, accountID string) (int64, int64, error) {
+	ctx, span := r.tracer.Start(ctx, "TransactionRepository.FindLatestLedgerState")
+	defer span.End()
+
+	start := time.Now()
+	defer func() {
+		r.metric.RecordDBQueryDuration("postgres", "entries", "find_latest_ledger_state", float64(time.Since(start).Milliseconds()))
+	}()
+
+	sequenceNumber, runningBalance, err := r.repo.FindLatestLedgerState(ctx, accountID)
+	if err != nil {
+		span.RecordError(err)
+		return 0, 0, err
+	}
+	return sequenceNumber, runningBalance, nil
+}
+
 func (r *ObservabilityTransactionRepo) ExistsByIdempotencyKey(ctx context.Context, idempotencyKey string) (bool, error) {
 	ctx, span := r.tracer.Start(ctx, "TransactionRepository.ExistsByIdempotencyKey")
 	defer span.End()
