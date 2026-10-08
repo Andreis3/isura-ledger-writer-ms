@@ -17,6 +17,9 @@ var _ = Describe("INTERNAL :: DOMAIN :: TRANSACTION :: EVENT", func() {
 				// Arrange (Given)
 				now := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 				metadata := map[string]string{"source": "test"}
+				entries := []transaction.TransactionEntryCreated{{
+					Position: 0, AccountID: "account", Direction: transaction.Debit, Amount: 1500, Currency: "BRL",
+				}}
 				event := transaction.NewTransactionCreated().
 					WithEventID("event").
 					WithTransactionID("transaction").
@@ -28,15 +31,20 @@ var _ = Describe("INTERNAL :: DOMAIN :: TRANSACTION :: EVENT", func() {
 					WithStatus("COMPLETED").
 					WithOccurredAt(now).
 					WithMetadata(metadata).
+					WithEntries(entries).
 					Build()
 
 				// Act (When)
 				metadata["source"] = "changed"
+				entries[0].AccountID = "changed"
 
 				// Assert (Then)
 				Expect(event.Metadata["source"]).To(Equal("test"))
 				Expect(event.OccurredAt).To(Equal(now))
 				Expect(event.Amount).To(Equal(int64(1500)))
+				Expect(event.Entries).To(Equal([]transaction.TransactionEntryCreated{{
+					Position: 0, AccountID: "account", Direction: transaction.Debit, Amount: 1500, Currency: "BRL",
+				}}))
 			})
 		})
 	})

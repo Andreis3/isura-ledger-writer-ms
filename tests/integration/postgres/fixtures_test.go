@@ -9,10 +9,13 @@ import (
 
 	"github.com/andreis3/isura-ledger-ms/internal/application/command"
 	"github.com/andreis3/isura-ledger-ms/internal/application/dto"
+	"github.com/andreis3/isura-ledger-ms/internal/application/service"
+	"github.com/andreis3/isura-ledger-ms/internal/domain/account"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/entity"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/money"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/outbox"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/transaction"
+	"github.com/andreis3/isura-ledger-ms/internal/infra/postgres/database"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/postgres/repository"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/postgres/uow"
 	adaptermocks "github.com/andreis3/isura-ledger-ms/tests/mocks/infra/adapter"
@@ -96,6 +99,19 @@ func insertAccount(ctx context.Context, pool *pgxpool.Pool) string {
 	return id
 }
 
+func insertCommittedAccounts(ctx context.Context, pool *pgxpool.Pool) (string, string) {
+	return insertAccount(ctx, pool), insertAccount(ctx, pool)
+}
+
+func cleanupCommittedAccounts(ctx context.Context, pool *pgxpool.Pool, accountIDs, transactionIDs []string) {
+	_, err := pool.Exec(ctx, `DELETE FROM entries WHERE account_id = ANY($1)`, accountIDs)
+	Expect(err).NotTo(HaveOccurred())
+	_, err = pool.Exec(ctx, `DELETE FROM transactions WHERE id = ANY($1)`, transactionIDs)
+	Expect(err).NotTo(HaveOccurred())
+	_, err = pool.Exec(ctx, `DELETE FROM accounts WHERE id = ANY($1)`, accountIDs)
+	Expect(err).NotTo(HaveOccurred())
+}
+
 func insertAccountV7(ctx context.Context, tx pgx.Tx) string {
 	id := newIDV7()
 	now := time.Now()
@@ -173,6 +189,39 @@ func newIntegrationCreateTransaction(pool *pgxpool.Pool) *command.CreateTransact
 	)
 }
 
+func prepareTransactionLedger(ctx context.Context, transactionContext context.Context, entityTransaction *transaction.Transaction, pool *pgxpool.Pool) error {
+	accountsByID := make(map[string]*account.Account)
+	accounts := make([]*account.Account, 0, len(entityTransaction.Entries))
+	db := interface {
+		QueryRow(context.Context, string, ...any) pgx.Row
+	}(pool)
+	if tx, ok := database.ExtractTx(transactionContext); ok {
+		db = tx
+	}
+	for _, entry := range entityTransaction.Entries {
+		if _, exists := accountsByID[entry.AccountID]; exists {
+			continue
+		}
+		id := entry.AccountID
+		var accountType, balancePolicy, currency string
+		if err := db.QueryRow(transactionContext, `SELECT type, balance_policy, currency FROM accounts WHERE id = $1`, id).
+			Scan(&accountType, &balancePolicy, &currency); err != nil {
+			return err
+		}
+		entityID, err := entity.NewID(id)
+		if err != nil {
+			return err
+		}
+		loaded := &account.Account{
+			ID: entityID, AccountType: account.Type(accountType),
+			BalancePolicy: account.BalancePolicy(balancePolicy), Currency: money.Currency(currency),
+		}
+		accountsByID[id] = loaded
+		accounts = append(accounts, loaded)
+	}
+	return service.AssignLedgerEntries(transactionContext, repository.NewTransactionRepository(pool), entityTransaction, accounts...)
+}
+
 func executeIntegrationTransaction(ctx context.Context, createTransaction *command.CreateTransaction, debitExternalID, creditExternalID, key string, amountValue int64) commandResult {
 	currency := string(money.BRL)
 	operation := string(transaction.OperationTransfer)
@@ -201,6 +250,69 @@ func newTransaction(accountA, accountB string) *transaction.Transaction {
 	entityTransaction, err := transaction.NewTransactionBuilder().WithID(id).WithIdempotencyKey(uuid.NewString()).WithFingerprint("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").WithStatus(transaction.Pending).WithAmount(amount).WithOperation(transaction.OperationTransfer).WithEntries([]*transaction.Entry{debit, credit}).Build()
 	Expect(err).NotTo(HaveOccurred())
 	return entityTransaction
+}
+
+func newMultiEntryTransaction(accountA, accountB string) *transaction.Transaction {
+	transactionID := newIDV7()
+	entries := make([]*transaction.Entry, 0, 4)
+	for _, data := range []struct {
+		accountID string
+		direction transaction.Direction
+		amount    int64
+	}{
+		{accountID: accountA, direction: transaction.Debit, amount: 1000},
+		{accountID: accountB, direction: transaction.Credit, amount: 600},
+		{accountID: accountA, direction: transaction.Debit, amount: 500},
+		{accountID: accountB, direction: transaction.Credit, amount: 900},
+	} {
+		amount, err := money.NewMoney(data.amount, money.BRL)
+		Expect(err).NotTo(HaveOccurred())
+		entry, err := transaction.NewEntryBuilder().WithID().WithAccountExternalID(uuid.NewString()).
+			WithTransactionID(transactionID).WithDirection(data.direction).WithAmount(amount).Build()
+		Expect(err).NotTo(HaveOccurred())
+		entry.AssignAccountID(data.accountID)
+		entries = append(entries, entry)
+	}
+	amount, err := money.NewMoney(1500, money.BRL)
+	Expect(err).NotTo(HaveOccurred())
+	entityTransaction, err := transaction.NewTransactionBuilder().WithID(transactionID).
+		WithIdempotencyKey(uuid.NewString()).WithFingerprint("cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc").
+		WithStatus(transaction.Pending).WithAmount(amount).WithOperation(transaction.OperationTransfer).
+		WithEntries(entries).Build()
+	Expect(err).NotTo(HaveOccurred())
+	return entityTransaction
+}
+
+func entryPositions(entries []*transaction.Entry) []int64 {
+	values := make([]int64, 0, len(entries))
+	for _, entry := range entries {
+		values = append(values, entry.TransactionPosition)
+	}
+	return values
+}
+
+func entryAccounts(entries []*transaction.Entry) []string {
+	values := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		values = append(values, entry.AccountID)
+	}
+	return values
+}
+
+func entrySequences(entries []*transaction.Entry) []int64 {
+	values := make([]int64, 0, len(entries))
+	for _, entry := range entries {
+		values = append(values, entry.SequenceNumber)
+	}
+	return values
+}
+
+func entryBalances(entries []*transaction.Entry) []int64 {
+	values := make([]int64, 0, len(entries))
+	for _, entry := range entries {
+		values = append(values, entry.RunningBalance)
+	}
+	return values
 }
 
 func newIDV7() string {

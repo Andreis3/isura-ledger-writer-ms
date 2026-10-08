@@ -4,6 +4,7 @@ package postgres_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	command "github.com/andreis3/isura-ledger-ms/internal/application/command"
@@ -35,7 +36,7 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: TRANSACTION REPOSITORY", f
 			Expect(err).NotTo(HaveOccurred())
 
 			entityTransaction := newTransaction(accountA, accountB)
-			err = repository.NewTransactionRepository(pool).Save(database.WithTx(ctx, tx), entityTransaction)
+			err = prepareTransactionLedger(ctx, database.WithTx(ctx, tx), entityTransaction, pool)
 
 			Expect(errors.Is(err, fault.ErrInsufficientBalance)).To(BeTrue())
 			assertLedgerRecords(ctx, pool, entityTransaction.ID.String(), 0, 0, 0)
@@ -47,6 +48,7 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: TRANSACTION REPOSITORY", f
 			original := newTransaction(accountA, accountB)
 			repo := repository.NewTransactionRepository(pool)
 			txContext := database.WithTx(ctx, tx)
+			Expect(prepareTransactionLedger(ctx, txContext, original, pool)).To(Succeed())
 			Expect(repo.Save(txContext, original)).To(Succeed())
 
 			key := original.IdempotencyKey
@@ -63,6 +65,99 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: TRANSACTION REPOSITORY", f
 			Expect(byID.Entries).To(HaveLen(2))
 			Expect(byID.Entries[0].TransactionPosition).To(Equal(int64(0)))
 			Expect(byID.Entries[1].TransactionPosition).To(Equal(int64(1)))
+		})
+		It("should preserve input positions and apply repeated account entries progressively", func() {
+			accountA, accountB := insertCommittedAccounts(ctx, pool)
+			entityTransaction := newMultiEntryTransaction(accountA, accountB)
+			defer cleanupCommittedAccounts(ctx, pool, []string{accountA, accountB}, []string{entityTransaction.ID.String()})
+			repo := repository.NewTransactionRepository(pool)
+
+			err := uow.NewUnitOfWork(pool).WithTransaction(ctx, func(txContext context.Context) error {
+				if err := prepareTransactionLedger(ctx, txContext, entityTransaction, pool); err != nil {
+					return err
+				}
+				return repo.Save(txContext, entityTransaction)
+			})
+
+			Expect(err).NotTo(HaveOccurred())
+			loaded, err := repo.Find(ctx, transaction.TransactionCriteria{
+				ID: new(entityTransaction.ID.String()), WithEntries: true,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(loaded.Entries).To(HaveLen(4))
+			Expect(entryPositions(loaded.Entries)).To(Equal([]int64{0, 1, 2, 3}))
+			Expect(entryAccounts(loaded.Entries)).To(Equal([]string{accountA, accountB, accountA, accountB}))
+			Expect(entrySequences(loaded.Entries)).To(Equal([]int64{1, 1, 2, 2}))
+			Expect(entryBalances(loaded.Entries)).To(Equal([]int64{1000, -600, 1500, -1500}))
+		})
+		It("should roll back the transaction and prior entries when a later batch entry fails", func() {
+			accountA, accountB := insertCommittedAccounts(ctx, pool)
+			repo := repository.NewTransactionRepository(pool)
+			baseline := newTransaction(accountA, accountB)
+			failing := newMultiEntryTransaction(accountA, accountB)
+			defer cleanupCommittedAccounts(ctx, pool, []string{accountA, accountB}, []string{baseline.ID.String(), failing.ID.String()})
+			Expect(uow.NewUnitOfWork(pool).WithTransaction(ctx, func(txContext context.Context) error {
+				if err := prepareTransactionLedger(ctx, txContext, baseline, pool); err != nil {
+					return err
+				}
+				return repo.Save(txContext, baseline)
+			})).To(Succeed())
+
+			failing.Entries[3].ID = baseline.Entries[0].ID
+			err := uow.NewUnitOfWork(pool).WithTransaction(ctx, func(txContext context.Context) error {
+				if err := prepareTransactionLedger(ctx, txContext, failing, pool); err != nil {
+					return err
+				}
+				return repo.Save(txContext, failing)
+			})
+
+			Expect(err).To(HaveOccurred())
+			assertLedgerRecords(ctx, pool, failing.ID.String(), 0, 0, 0)
+			assertLedgerRecords(ctx, pool, baseline.ID.String(), 1, 2, 0)
+		})
+		It("should retry concurrent transactions with repeated entries on shared accounts", func() {
+			accountA, accountB := insertCommittedAccounts(ctx, pool)
+			repo := repository.NewTransactionRepository(pool)
+			unitOfWork := uow.NewUnitOfWork(pool)
+			transactions := []*transaction.Transaction{
+				newMultiEntryTransaction(accountA, accountB),
+				newMultiEntryTransaction(accountA, accountB),
+			}
+			transactionIDs := []string{transactions[0].ID.String(), transactions[1].ID.String()}
+			defer cleanupCommittedAccounts(ctx, pool, []string{accountA, accountB}, transactionIDs)
+			errorsCh := make(chan error, len(transactions))
+			var wg sync.WaitGroup
+			for _, entityTransaction := range transactions {
+				wg.Add(1)
+				go func(entityTransaction *transaction.Transaction) {
+					defer wg.Done()
+					errorsCh <- unitOfWork.WithRetryableTransaction(ctx, func(txContext context.Context) error {
+						if err := prepareTransactionLedger(ctx, txContext, entityTransaction, pool); err != nil {
+							return err
+						}
+						return repo.Save(txContext, entityTransaction)
+					})
+				}(entityTransaction)
+			}
+			wg.Wait()
+			close(errorsCh)
+			for err := range errorsCh {
+				Expect(err).NotTo(HaveOccurred())
+			}
+
+			for _, accountID := range []string{accountA, accountB} {
+				rows, err := pool.Query(ctx, `SELECT sequence_number FROM entries WHERE account_id = $1 ORDER BY sequence_number`, accountID)
+				Expect(err).NotTo(HaveOccurred())
+				var sequences []int64
+				for rows.Next() {
+					var sequence int64
+					Expect(rows.Scan(&sequence)).To(Succeed())
+					sequences = append(sequences, sequence)
+				}
+				Expect(rows.Err()).NotTo(HaveOccurred())
+				rows.Close()
+				Expect(sequences).To(Equal([]int64{1, 2, 3, 4}))
+			}
 		})
 		It("should backfill historical transaction positions in deterministic account sequence order", func() {
 			// Arrange.
@@ -238,6 +333,16 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: TRANSACTION REPOSITORY", f
 			Expect(second.output.IdempotentReplay).To(BeTrue())
 			Expect(second.output.TransactionID).To(Equal(first.output.TransactionID))
 
+			var payload []byte
+			Expect(pool.QueryRow(ctx, `SELECT payload FROM outbox_events WHERE aggregate_id = $1`, *first.output.TransactionID).Scan(&payload)).To(Succeed())
+			var createdEvent transaction.TransactionCreated
+			Expect(json.Unmarshal(payload, &createdEvent)).To(Succeed())
+			Expect(createdEvent.Entries).To(HaveLen(2))
+			Expect(createdEvent.Entries[0].Position).To(Equal(int64(0)))
+			Expect(createdEvent.Entries[0].Direction).To(Equal(transaction.Credit))
+			Expect(createdEvent.Entries[1].Position).To(Equal(int64(1)))
+			Expect(createdEvent.Entries[1].Direction).To(Equal(transaction.Debit))
+
 			var transactions, entries, outboxes int
 			Expect(pool.QueryRow(ctx, `SELECT count(*) FROM transactions WHERE idempotency_key = $1`, key).Scan(&transactions)).To(Succeed())
 			Expect(pool.QueryRow(ctx, `SELECT count(*) FROM entries WHERE transaction_id = $1`, *first.output.TransactionID).Scan(&entries)).To(Succeed())
@@ -256,6 +361,7 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: TRANSACTION REPOSITORY", f
 			accountA, accountB := insertAccounts(ctx, tx)
 			entityTransaction := newTransaction(accountA, accountB)
 			txContext := database.WithTx(ctx, tx)
+			Expect(prepareTransactionLedger(ctx, txContext, entityTransaction, pool)).To(Succeed())
 			Expect(repository.NewTransactionRepository(pool).Save(txContext, entityTransaction)).To(Succeed())
 
 			var indexDefinition string
@@ -277,6 +383,7 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: TRANSACTION REPOSITORY", f
 			accountA, accountB := insertAccounts(ctx, tx)
 			entityTransaction := newTransaction(accountA, accountB)
 			txContext := database.WithTx(ctx, tx)
+			Expect(prepareTransactionLedger(ctx, txContext, entityTransaction, pool)).To(Succeed())
 			Expect(repository.NewTransactionRepository(pool).Save(txContext, entityTransaction)).To(Succeed())
 
 			var debit, credit int64
@@ -316,7 +423,17 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: TRANSACTION REPOSITORY", f
 						errs <- err
 						return
 					}
-					if err := repository.NewTransactionRepository(pool).Save(database.WithTx(ctx, transactionCtx), transfer); err != nil {
+					txContext := database.WithTx(ctx, transactionCtx)
+					if err := prepareTransactionLedger(ctx, txContext, transfer, pool); err != nil {
+						rollbackErr := transactionCtx.Rollback(ctx)
+						if rollbackErr != nil {
+							errs <- errors.Join(err, rollbackErr)
+							return
+						}
+						errs <- err
+						return
+					}
+					if err := repository.NewTransactionRepository(pool).Save(txContext, transfer); err != nil {
 						rollbackErr := transactionCtx.Rollback(ctx)
 						if rollbackErr != nil {
 							errs <- errors.Join(err, rollbackErr)

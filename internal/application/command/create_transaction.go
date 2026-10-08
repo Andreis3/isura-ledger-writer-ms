@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"sort"
 	"time"
 
 	"github.com/andreis3/isura-ledger-ms/internal/application"
 	"github.com/andreis3/isura-ledger-ms/internal/application/dto"
+	"github.com/andreis3/isura-ledger-ms/internal/application/service"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/account"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/fault"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/money"
@@ -100,11 +100,12 @@ func (c *CreateTransaction) Execute(ctx context.Context, input dto.CreateTransac
 		}
 
 		assignEntryReferences(entityTransaction, debitAccount, creditAccount)
+		if err := service.AssignLedgerEntries(txCtx, c.transactionRepository, entityTransaction, debitAccount, creditAccount); err != nil {
+			return err
+		}
 		if err := entityTransaction.Complete(); err != nil {
 			return err
 		}
-		sortEntries(entityTransaction)
-
 		if err := c.transactionRepository.Save(txCtx, entityTransaction); err != nil {
 			return err
 		}
@@ -234,12 +235,6 @@ func assignEntryReferences(entityTransaction *transaction.Transaction, debit, cr
 		}
 		entry.AssignAccountID(credit.ID.String())
 	}
-}
-
-func sortEntries(entityTransaction *transaction.Transaction) {
-	sort.SliceStable(entityTransaction.Entries, func(i, j int) bool {
-		return entityTransaction.Entries[i].AccountID < entityTransaction.Entries[j].AccountID
-	})
 }
 
 func replayOutput(existing *transaction.Transaction) *dto.CreateTransactionOutput {

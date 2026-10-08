@@ -56,6 +56,16 @@ var _ = Describe("CreateTransaction", func() {
 		Expect(event.EventID).NotTo(BeEmpty())
 		Expect(event.Status).To(Equal(string(transaction.Completed)))
 		Expect(event.Metadata).To(Equal(input.Metadata))
+		Expect(event.Entries).To(HaveLen(len(transactions.saved.Entries)))
+		for position, entry := range transactions.saved.Entries {
+			Expect(event.Entries[position]).To(Equal(transaction.TransactionEntryCreated{
+				Position:  int64(position),
+				AccountID: entry.AccountID,
+				Direction: entry.Direction,
+				Amount:    entry.Amount.Amount(),
+				Currency:  string(entry.Amount.Currency()),
+			}))
+		}
 	})
 
 	It("rejects a missing account without persisting anything", func() {
@@ -270,10 +280,12 @@ type accountRepository struct {
 func newAccountRepository() *accountRepository {
 	debitID, _ := entity.NewID("019ff448-c43d-70d3-83c7-dfa0674469b7")
 	creditID, _ := entity.NewID("019ff448-c43d-70d3-83c7-dfa0674469b8")
-	return &accountRepository{accounts: map[string]*account.Account{
-		debitExternalID:  {ID: debitID, AccountExternalID: debitExternalID, Status: account.StatusActive, Currency: money.BRL},
-		creditExternalID: {ID: creditID, AccountExternalID: creditExternalID, Status: account.StatusActive, Currency: money.BRL},
-	}}
+	return &accountRepository{
+		accounts: map[string]*account.Account{
+			debitExternalID:  {ID: debitID, AccountExternalID: debitExternalID, Status: account.StatusActive, AccountType: account.Liability, BalancePolicy: account.BalanceUnrestricted, Currency: money.BRL},
+			creditExternalID: {ID: creditID, AccountExternalID: creditExternalID, Status: account.StatusActive, AccountType: account.Asset, BalancePolicy: account.BalanceUnrestricted, Currency: money.BRL},
+		},
+	}
 }
 
 func (r *accountRepository) Save(context.Context, *account.Account) error { return nil }
@@ -295,6 +307,7 @@ type transactionRepository struct {
 	saveErrors     []error
 	saveCalls      int
 	attempts       []*transaction.Transaction
+	ledgerStates   map[string]account.LedgerState
 }
 
 func (r *transactionRepository) Save(_ context.Context, value *transaction.Transaction) error {
@@ -323,6 +336,11 @@ func (r *transactionRepository) Find(_ context.Context, params transaction.Trans
 
 func (r *transactionRepository) ExistsByIdempotencyKey(context.Context, string) (bool, error) {
 	return r.existing != nil, nil
+}
+
+func (r *transactionRepository) FindLatestLedgerState(_ context.Context, accountID string) (int64, int64, error) {
+	state := r.ledgerStates[accountID]
+	return state.SequenceNumber, state.RunningBalance, nil
 }
 
 type outboxRepository struct {
