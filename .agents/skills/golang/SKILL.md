@@ -35,6 +35,8 @@ Uma recomendação genérica não deve sobrescrever silenciosamente uma decisão
 - [Tracing OpenTelemetry](references/tracer.md)
 - [Persistência PostgreSQL](references/postgres.md)
 
+Para decisões envolvendo SOLID, coesão e abstrações, consulte também [SOLID aplicado a Go](../solid-go/SKILL.md).
+
 ## Guias de engenharia
 
 - [Concorrência em Go — guia baseado nos livros](references/go-concurrency-guide.md)
@@ -69,7 +71,7 @@ Esses guias complementam as regras específicas do repositório. Em caso de conf
 - Não declare na struct um campo que mudará de valor durante a vida do objeto sem definir sua sincronização. Prefira estado imutável após a construção e variáveis locais.
 - Ao compartilhar estado, proteja todas as leituras e escritas com `sync.Mutex`, `sync.RWMutex`, `atomic` ou canais.
 - Não compartilhe mapas, slices ou ponteiros mutáveis sem copiar ou sincronizar o acesso.
-- Execute `go test -race ./...` quando alterar código concorrente.
+- Em alterações de concorrência, execute `make unit` e `make unit-verbose` (race detector nos testes); considere `make run-race` para validar o processo em execução.
 
 ## Erros
 
@@ -97,8 +99,10 @@ No encerramento, pare de aceitar trabalho novo, cancele consumidores e feche con
 Quando aplicável, execute:
 
 ```bash
-gofmt -w .
-go vet ./...
-go test ./...
-go test -race ./...
+gofmt -w <arquivos-go-alterados>
+make vet
+make unit
+make unit-verbose      # concorrência, quando aplicável
+make unit-cover        # cobertura, quando aplicável
+make integration-tests # integração, quando aplicável
 ```
