@@ -44,7 +44,7 @@ var _ = Describe("CHAOS :: NATS JETSTREAM OUTAGE",func(){
   Expect(err).NotTo(HaveOccurred())
   js,err:=jetstream.New(nc)
   Expect(err).NotTo(HaveOccurred())
-  stream,err:=js.CreateStream(ctx,jetstream.StreamConfig{
+  _,err=js.CreateStream(ctx,jetstream.StreamConfig{
    Name:"CHAOS_LEDGER",
    Subjects:[]string{"ledger.transaction.created"},
   })
@@ -61,13 +61,24 @@ var _ = Describe("CHAOS :: NATS JETSTREAM OUTAGE",func(){
   nc.Close()
 
   Expect(broker.Start(ctx)).To(Succeed())
+
+  // Docker may assign a different published host port when a container is
+  // started again. Never reuse the mapped address captured before Stop.
+  // Refresh it on every probe so delayed port publication is also covered.
+  recoveredURL:=""
   Eventually(func(g Gomega){
-   probe,connErr:=natsgo.Connect(url,natsgo.Timeout(time.Second),natsgo.NoReconnect())
+   currentHost,hostErr:=broker.Host(ctx)
+   g.Expect(hostErr).NotTo(HaveOccurred())
+   currentPort,portErr:=broker.MappedPort(ctx,"4222/tcp")
+   g.Expect(portErr).NotTo(HaveOccurred())
+   endpoint:=fmt.Sprintf("nats://%s:%s",currentHost,currentPort.Port())
+   probe,connErr:=natsgo.Connect(endpoint,natsgo.Timeout(time.Second),natsgo.NoReconnect())
    g.Expect(connErr).NotTo(HaveOccurred())
    probe.Close()
-  },15*time.Second,300*time.Millisecond).Should(Succeed())
+   recoveredURL=endpoint
+  },20*time.Second,300*time.Millisecond).Should(Succeed())
 
-  recovered,err:=natsgo.Connect(url,natsgo.Timeout(3*time.Second),natsgo.NoReconnect())
+  recovered,err:=natsgo.Connect(recoveredURL,natsgo.Timeout(3*time.Second),natsgo.NoReconnect())
   Expect(err).NotTo(HaveOccurred())
   defer recovered.Close()
   jsRecovered,err:=jetstream.New(recovered)
@@ -80,6 +91,5 @@ var _ = Describe("CHAOS :: NATS JETSTREAM OUTAGE",func(){
   info,err:=recoveredStream.Info(ctx)
   Expect(err).NotTo(HaveOccurred())
   Expect(info.State.Msgs).To(Equal(uint64(2)))
-  _=stream
  })
 })
