@@ -40,6 +40,8 @@ type reconciliationAccount struct {
 	state   account.LedgerState
 	count   int
 	latest  int64
+ mismatch bool
+ expectedAtMismatch int64
 }
 
 type LedgerReconciliation struct {
@@ -139,7 +141,12 @@ func (r *LedgerReconciliation) replayEntries(ctx context.Context, accounts map[s
 		if err := applyReconciliationEntry(historical, sequence.Int64, transaction.Direction(direction.String), amount.Int64, money.Currency(currency.String)); err != nil {
 			return ReconciliationReport{}, fmt.Errorf("replay entry for account %q sequence %d: %w", accountID.String, sequence.Int64, err)
 		}
-		historical.latest = persisted.Int64
+		if !historical.mismatch && historical.state.RunningBalance != persisted.Int64 {
+ historical.mismatch = true
+ historical.expectedAtMismatch = historical.state.RunningBalance
+ historical.latest = persisted.Int64
+ }
+ if !historical.mismatch { historical.latest = persisted.Int64 }
 	}
 	if err := rows.Err(); err != nil {
 		return ReconciliationReport{}, fmt.Errorf("iterate entries for reconciliation: %w", err)
@@ -152,7 +159,10 @@ func applyReconciliationEntry(historical *reconciliationAccount, sequence int64,
 	if err != nil {
 		return fmt.Errorf("build amount: %w", err)
 	}
-	state, err := historical.account.ApplyHistoricalEntry(historical.state, direction, entryAmount)
+	if sequence != historical.state.SequenceNumber+1 {
+ return fmt.Errorf("non-contiguous entry sequence: got %d, expected %d", sequence, historical.state.SequenceNumber+1)
+ }
+ state, err := historical.account.ApplyHistoricalEntry(historical.state, direction, entryAmount)
 	if err != nil {
 		return err
 	}
@@ -176,12 +186,12 @@ func buildReconciliationReport(accounts map[string]*reconciliationAccount) Recon
 	for _, id := range accountIDs {
 		historical := accounts[id]
 		report.EntriesChecked += historical.count
-		if historical.count == 0 || historical.state.RunningBalance == historical.latest {
+		if historical.count == 0 || !historical.mismatch {
 			continue
 		}
 		report.Mismatches = append(report.Mismatches, ReconciliationMismatch{
 			AccountID: id, EntriesChecked: historical.count,
-			ExpectedBalance:  historical.state.RunningBalance,
+			ExpectedBalance:  historical.expectedAtMismatch,
 			PersistedBalance: historical.latest,
 			Currency:         string(historical.account.Currency),
 		})
