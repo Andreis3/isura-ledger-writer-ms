@@ -67,11 +67,12 @@ var _ = Describe("INTERNAL :: APPLICATION :: DTO :: LOG VALUE", func() {
 				for _, field := range fields {
 					Expect(field.String()).NotTo(ContainSubstring("do-not-log-me"))
 				}
-				// Account IDs and the idempotency key are currently returned verbatim.
-				// The mask policy for these fields requires a separate production change.
-				Expect(fields["idempotency_key"].String()).To(Equal(key))
-				Expect(fields["debit_account_id"].String()).To(Equal(debit))
-				Expect(fields["credit_account_id"].String()).To(Equal(credit))
+				// Idempotency keys are never written to logs; only short account suffixes remain.
+				Expect(fields["idempotency_key"].String()).To(Equal("[REDACTED]"))
+				Expect(fields["debit_account_id"].String()).To(Equal("****ount"))
+				Expect(fields["credit_account_id"].String()).To(Equal("****ount"))
+				Expect(fields["debit_account_id"].String()).NotTo(Equal(debit))
+				Expect(fields["credit_account_id"].String()).NotTo(Equal(credit))
 			})
 		})
 	})
