@@ -37,6 +37,7 @@ help:
 	@echo ""
 	@echo " [ Testes Integração ]"
 	@echo "   make integration-tests - Roda os testes de integração"
+	@echo "   make chaos-tests - Testa interrupção e recuperação de PostgreSQL/NATS"
 	@echo "   make integration-concurrency-repeat - Repete testes de concorrência no PostgreSQL"
 	@echo ""
 	@echo " [ Testes de Carga (Vegeta) ]"
@@ -96,6 +97,10 @@ unit-report:
 
 integration-tests:
 	@go test ./tests/integration/... --tags=integration -v -count=1
+
+# Isolated Testcontainers fault-injection suites, selected by Ginkgo description.
+chaos-tests:
+	@go test -race -tags=integration -count=1 -timeout=5m ./tests/integration/nats ./tests/integration/postgres -ginkgo.focus=CHAOS
 
 # Repeats the actual concurrent PostgreSQL scenarios against fresh Testcontainers.
 CONCURRENCY_REPEATS ?= 5
@@ -192,3 +197,5 @@ reconcile-balances:
 		vet,
 		integration-tests,
 		integration-concurrency-repeat
+
+.PHONY: chaos-tests
