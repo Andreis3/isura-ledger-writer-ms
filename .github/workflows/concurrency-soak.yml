@@ -1,0 +1,25 @@
+name: Ledger PostgreSQL Concurrency Soak
+
+on:
+  schedule:
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repeated-concurrency:
+    name: PostgreSQL concurrency x5 (race)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install Atlas CLI for integration migrations
+        run: curl -sSf https://atlasgo.sh | sh
+      - name: Repeat concurrency integration scenarios
+        run: make integration-concurrency-repeat CONCURRENCY_REPEATS=5
