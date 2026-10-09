@@ -16,6 +16,8 @@ var _ = Describe("INTEGRATION :: POSTGRES :: OUTBOX CRASH RECOVERY",func(){
  It("should reclaim an unacknowledged outbox publish without changing event identity",func(){
   repo:=repository.NewOutBoxRepository(pool)
   txCtx:=database.WithTx(ctx,tx)
+  _,err:=tx.Exec(ctx,"DELETE FROM outbox_events")
+  Expect(err).NotTo(HaveOccurred())
   item:=newOutbox("crash-recovery-test")
   Expect(repo.Save(txCtx,item)).To(Succeed())
 
