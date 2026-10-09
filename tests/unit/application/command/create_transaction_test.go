@@ -394,6 +394,7 @@ type transactionRepository struct {
 	saved          *transaction.Transaction
 	findCriteria   transaction.TransactionCriteria
 	findCalls      int
+	findErr        error
 	saveErrors     []error
 	saveCalls      int
 	attempts       []*transaction.Transaction
@@ -418,6 +419,9 @@ func (r *transactionRepository) Save(_ context.Context, value *transaction.Trans
 func (r *transactionRepository) Find(_ context.Context, params transaction.TransactionCriteria) (*transaction.Transaction, error) {
 	r.findCalls++
 	r.findCriteria = params
+	if r.findErr != nil {
+		return nil, r.findErr
+	}
 	if r.existing == nil {
 		return nil, transaction.ErrTransactionNotFound
 	}
