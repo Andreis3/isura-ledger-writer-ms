@@ -3,12 +3,12 @@
 package fault_test
 
 import (
- "testing"
- . "github.com/onsi/ginkgo/v2"
- . "github.com/onsi/gomega"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+	"testing"
 )
 
 func TestFault(t *testing.T) {
- RegisterFailHandler(Fail)
- RunSpecs(t, "Domain Fault Suite")
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Domain Fault Suite")
 }
