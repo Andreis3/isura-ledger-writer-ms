@@ -7,7 +7,6 @@ import (
  "errors"
 
  "github.com/andreis3/isura-ledger-ms/internal/domain/account"
- "github.com/andreis3/isura-ledger-ms/internal/application/command"
  "github.com/jackc/pgx/v5/pgconn"
  . "github.com/onsi/ginkgo/v2"
  . "github.com/onsi/gomega"
