@@ -186,12 +186,12 @@ func buildReconciliationReport(accounts map[string]*reconciliationAccount) Recon
 	for _, id := range accountIDs {
 		historical := accounts[id]
 		report.EntriesChecked += historical.count
-		if historical.count == 0 || !historical.mismatch {
+		if historical.count == 0 || (!historical.mismatch && historical.state.RunningBalance == historical.latest) {
 			continue
 		}
 		report.Mismatches = append(report.Mismatches, ReconciliationMismatch{
 			AccountID: id, EntriesChecked: historical.count,
-			ExpectedBalance:  historical.expectedAtMismatch,
+			ExpectedBalance:  historicalExpectedBalance(historical),
 			PersistedBalance: historical.latest,
 			Currency:         string(historical.account.Currency),
 		})
@@ -199,4 +199,11 @@ func buildReconciliationReport(accounts map[string]*reconciliationAccount) Recon
 	report.MismatchCount = len(report.Mismatches)
 	report.Reconciled = report.MismatchCount == 0
 	return report
+}
+
+// historicalExpectedBalance keeps the first corrupted intermediate entry visible
+// even when subsequent entries happen to converge to the expected final balance.
+func historicalExpectedBalance(a *reconciliationAccount) int64 {
+ if a.mismatch { return a.expectedAtMismatch }
+ return a.state.RunningBalance
 }
