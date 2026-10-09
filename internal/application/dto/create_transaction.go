@@ -244,40 +244,53 @@ func (d CreateTransactionInput) normalizedEntries() []EntryInput {
 	}
 }
 
-// LogValue implements slog.LogValuer to safely log transaction input without exposing raw sensitive data.
+// LogValue deliberately excludes raw idempotency keys, full account identifiers,
+// entry payloads and metadata values from structured application logs.
 func (d CreateTransactionInput) LogValue() slog.Value {
-	// Safe extraction helpers to avoid nil pointer panics during logging
-	idempotencyKey := ""
-	if d.IdempotencyKey != nil {
-		idempotencyKey = *d.IdempotencyKey
-	}
+ idempotencyKey := ""
+ if d.IdempotencyKey != nil && *d.IdempotencyKey != "" {
+  idempotencyKey = "[REDACTED]"
+ }
 
-	debitAccount := ""
-	if d.DebitAccountID != nil {
-		debitAccount = util.String(d.DebitAccountID) // Substitua por sua função de máscara real, ex: mask.UUID(*d.DebitAccountID)
-	}
+ debitAccount := ""
+ if d.DebitAccountID != nil {
+  debitAccount = maskAccountIDForLog(*d.DebitAccountID)
+ }
 
-	creditAccount := ""
-	if d.CreditAccountID != nil {
-		creditAccount = util.String(d.CreditAccountID) // Substitua por sua função de máscara real
-	}
+ creditAccount := ""
+ if d.CreditAccountID != nil {
+  creditAccount = maskAccountIDForLog(*d.CreditAccountID)
+ }
 
-	var amount int64
-	if d.Amount != nil {
-		amount = util.Int64(d.Amount)
-	}
+ var amount int64
+ if d.Amount != nil {
+  amount = *d.Amount
+ }
 
-	currency := ""
-	if d.Currency != nil {
-		currency = util.String(d.Currency)
-	}
+ currency := ""
+ if d.Currency != nil {
+  currency = *d.Currency
+ }
 
-	return slog.GroupValue(
-		slog.String("idempotency_key", idempotencyKey),
-		slog.String("debit_account_id", debitAccount),
-		slog.String("credit_account_id", creditAccount),
-		slog.Int64("amount", amount),
-		slog.String("currency", currency),
-		slog.Int("metadata_entries", len(d.Metadata)),
-	)
+ return slog.GroupValue(
+  slog.String("idempotency_key", idempotencyKey),
+  slog.String("debit_account_id", debitAccount),
+  slog.String("credit_account_id", creditAccount),
+  slog.Int64("amount", amount),
+  slog.String("currency", currency),
+  slog.Int("metadata_entries", len(d.Metadata)),
+ )
+}
+
+// maskAccountIDForLog leaves only a short suffix for debugging correlation.
+// Short identifiers are completely redacted instead of partially exposed.
+func maskAccountIDForLog(value string) string {
+ if value == "" {
+  return ""
+ }
+ chars := []rune(value)
+ if len(chars) <= 4 {
+  return "[REDACTED]"
+ }
+ return "****" + string(chars[len(chars)-4:])
 }
