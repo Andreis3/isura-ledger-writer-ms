@@ -19,10 +19,12 @@ import (
  "github.com/andreis3/isura-ledger-ms/internal/infra/configs"
  infranats "github.com/andreis3/isura-ledger-ms/internal/infra/nats"
  "github.com/andreis3/isura-ledger-ms/internal/infra/postgres/repository"
+ "github.com/andreis3/isura-ledger-ms/internal/infra/postgres/database"
  "github.com/andreis3/isura-ledger-ms/internal/infra/postgres/uow"
  adaptermocks "github.com/andreis3/isura-ledger-ms/tests/mocks/infra/adapter"
  "github.com/google/uuid"
  "github.com/jackc/pgx/v5/pgxpool"
+ "github.com/jackc/pgx/v5"
  natsgo "github.com/nats-io/nats.go"
  "github.com/nats-io/nats.go/jetstream"
  "github.com/testcontainers/testcontainers-go"
@@ -182,6 +184,16 @@ var _ = Describe("CHAOS :: SIMULTANEOUS POSTGRES AND NATS OUTAGE",func(){
   Expect(outboxCount).To(Equal(1))
   Expect(status).To(Equal(string(outbox.Success)))
   Expect(publishedAt).NotTo(BeNil())
+  // Reconcile the actual persisted double-entry ledger after both restarts.
+  auditTx,err:=recoveredDB.BeginTx(runCtx,pgx.TxOptions{IsoLevel:pgx.RepeatableRead,AccessMode:pgx.ReadOnly})
+  Expect(err).NotTo(HaveOccurred())
+  defer func(){_ = auditTx.Rollback(context.Background())}()
+  report,err:=repository.NewLedgerReconciliation(recoveredDB).Run(database.WithTx(runCtx,auditTx))
+  Expect(err).NotTo(HaveOccurred())
+  Expect(report.Reconciled).To(BeTrue(), "persisted running balances must match ledger replay")
+  Expect(report.MismatchCount).To(BeZero())
+  Expect(report.EntriesChecked).To(BeNumerically(">=",2))
+
   stream,err:=recoveredJS.Stream(runCtx,"CHAOS_DUAL")
   Expect(err).NotTo(HaveOccurred())
   info,err:=stream.Info(runCtx)
