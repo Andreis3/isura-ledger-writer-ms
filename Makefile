@@ -36,7 +36,7 @@ help:
 	@echo "   make vet              - Executa análise estática no entrypoint do servidor"
 	@echo ""
 	@echo " [ Testes Integração ]"
-	@echo "   make integration-tests - Roda os testes de integração\"\n\t@echo \"   make chaos-tests - Testa interrupção e recuperação de PostgreSQL/NATS"
+	@echo "   make integration-tests - Roda os testes de integração"\n\t@echo "   make chaos-tests - Testa interrupção e recuperação de PostgreSQL/NATS"
 	@echo "   make integration-concurrency-repeat - Repete testes de concorrência no PostgreSQL"
 	@echo ""
 	@echo " [ Testes de Carga (Vegeta) ]"
@@ -195,5 +195,6 @@ reconcile-balances:
 		help,
 		vet,
 		integration-tests,
-		integration-concurrency-repeat,\
-		chaos-tests
+		integration-concurrency-repeat
+
+.PHONY: chaos-tests
