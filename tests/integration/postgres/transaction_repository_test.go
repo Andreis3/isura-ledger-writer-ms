@@ -263,6 +263,11 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: TRANSACTION REPOSITORY", f
 			var count int
 			Expect(pool.QueryRow(ctx, "SELECT count(*) FROM transactions WHERE idempotency_key = $1", key).Scan(&count)).To(Succeed())
 			Expect(count).To(Equal(1))
+			var entries, outboxes int
+			Expect(pool.QueryRow(ctx, "SELECT count(*) FROM entries WHERE transaction_id = $1", transactionID).Scan(&entries)).To(Succeed())
+			Expect(pool.QueryRow(ctx, "SELECT count(*) FROM outbox_events WHERE aggregate_id = $1", transactionID).Scan(&outboxes)).To(Succeed())
+			Expect(entries).To(Equal(2))
+			Expect(outboxes).To(Equal(1))
 		})
 		It("should create, replay, and reject conflicting multi-entry intents atomically", func() {
 			debitExternalID, creditExternalID := insertFundedAccountsForCommand(ctx, pool, 100, 1)
@@ -536,7 +541,9 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: TRANSACTION REPOSITORY", f
 				`, uuid.NewString(), accountA, entityTransaction.ID.String(), time.Now())
 			var pgErr *pgconn.PgError
 			Expect(errors.As(err, &pgErr)).To(BeTrue())
+			Expect(pgErr.Code).To(Equal("23505"))
 			Expect(pgErr.ConstraintName).To(Equal("unique_entry_sequence_number"))
+			Expect(uow.IsConcurrencyConflict(err)).To(BeTrue())
 		})
 		It("should reconstruct a transfer from its append-only entries", func() {
 			accountA, accountB := insertAccounts(ctx, tx)
