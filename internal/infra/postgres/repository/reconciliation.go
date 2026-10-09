@@ -141,12 +141,7 @@ func (r *LedgerReconciliation) replayEntries(ctx context.Context, accounts map[s
 		if err := applyReconciliationEntry(historical, sequence.Int64, transaction.Direction(direction.String), amount.Int64, money.Currency(currency.String)); err != nil {
 			return ReconciliationReport{}, fmt.Errorf("replay entry for account %q sequence %d: %w", accountID.String, sequence.Int64, err)
 		}
-		if !historical.mismatch && historical.state.RunningBalance != persisted.Int64 {
- historical.mismatch = true
- historical.expectedAtMismatch = historical.state.RunningBalance
- historical.latest = persisted.Int64
- }
- if !historical.mismatch { historical.latest = persisted.Int64 }
+		compareReconciliationBalance(historical, persisted.Int64)
 	}
 	if err := rows.Err(); err != nil {
 		return ReconciliationReport{}, fmt.Errorf("iterate entries for reconciliation: %w", err)
@@ -206,4 +201,13 @@ func buildReconciliationReport(accounts map[string]*reconciliationAccount) Recon
 func historicalExpectedBalance(a *reconciliationAccount) int64 {
  if a.mismatch { return a.expectedAtMismatch }
  return a.state.RunningBalance
+}
+
+func compareReconciliationBalance(h *reconciliationAccount, persisted int64) {
+ if !h.mismatch && h.state.RunningBalance != persisted {
+  h.mismatch = true
+  h.expectedAtMismatch = h.state.RunningBalance
+  h.latest = persisted
+ }
+ if !h.mismatch { h.latest = persisted }
 }
