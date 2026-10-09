@@ -67,7 +67,7 @@ func (u *UnitOfWork) WithTransaction(ctx context.Context, fn func(ctx context.Co
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return fault.CommitTransactionError(errors.Join(err, ErrCommitTransaction))
+		return fault.CommitTransactionError(errors.Join(err, ErrCommitTransaction, fault.ErrCommitOutcomeUnknown))
 	}
 
 	return nil

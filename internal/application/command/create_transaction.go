@@ -85,11 +85,19 @@ func (c *CreateTransaction) Execute(ctx context.Context, input dto.CreateTransac
 		return attemptErr
 	})
 	if err != nil {
+		if errors.Is(err, fault.ErrCommitOutcomeUnknown) {
+			resolved, resolveErr := c.resolveUnknownCommit(ctx, input, requestFingerprint, err)
+			if resolveErr != nil {
+				return c.fail(span, resolveErr, "commit outcome uncertain")
+			}
+			output = resolved
+			} else {
 		replay, replayErr := c.replayAfterIdempotencyRace(ctx, input, requestFingerprint, err)
 		if replayErr != nil {
 			return c.fail(span, replayErr, "transaction failed")
 		}
 		output = replay
+		}
 	}
 	if output == nil {
 		return c.fail(span, err, "transaction failed")
@@ -188,6 +196,31 @@ func creditAccountID(input dto.CreateTransactionInput) string {
 		return ""
 	}
 	return *input.CreditAccountID
+}
+
+// resolveUnknownCommit verifies a committed result by idempotency key without
+// opening a new write transaction. A failed or absent lookup retains the
+// indeterminate outcome so callers never assume that a second write is safe.
+func (c *CreateTransaction) resolveUnknownCommit(
+ ctx context.Context,
+ input dto.CreateTransactionInput,
+ fingerprint string,
+ commitErr error,
+) (*dto.CreateTransactionOutput, error) {
+ if input.IdempotencyKey == nil || *input.IdempotencyKey == "" {
+  return nil, commitErr
+ }
+ lookupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+ defer cancel()
+ existing, err := c.findByIdempotencyKey(lookupCtx, input.IdempotencyKey)
+ if err != nil || existing == nil {
+  return nil, errors.Join(commitErr, err)
+ }
+ if existing.Fingerprint != fingerprint {
+  c.metrics.RecordIdempotencyTotal("conflict")
+  return nil, fault.IdempotencyConflictError(errors.New("idempotency fingerprint mismatch"))
+ }
+ return replayOutput(existing), nil
 }
 
 func (c *CreateTransaction) replayAfterIdempotencyRace(

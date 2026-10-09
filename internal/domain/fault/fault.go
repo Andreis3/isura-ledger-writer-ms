@@ -40,6 +40,9 @@ const (
 
 // DomainError is the rich domain error.
 // It implements the error interface and is compatible with errors.Is / errors.As / errors.Unwrap.
+// ErrCommitOutcomeUnknown indicates that the database may have committed despite a lost acknowledgement.
+var ErrCommitOutcomeUnknown = errors.New("transaction commit outcome unknown")
+
 type DomainError struct {
 	Code             Code           // Semantic classification
 	FriendlyMessage  string         // Safe message to expose to the client
