@@ -20,7 +20,9 @@ var _ = Describe("CHAOS :: POSTGRES :: POST-FAILURE LEDGER RECONCILIATION",func(
  It("preserves the committed running balance and detects persisted corruption after a crash",func(){
   auditCtx,cancel:=context.WithTimeout(ctx,30*time.Second)
   defer cancel()
-  accountID,transactionID,entryID:=insertReconciliationFixture(auditCtx,pool,1,"DEBIT",125,125)
+  accountID,transactionID,_:=insertReconciliationFixture(auditCtx,pool,1,"DEBIT",125,125)
+  var entryID string
+  Expect(pool.QueryRow(auditCtx,"SELECT id FROM entries WHERE account_id=$1 AND transaction_id=$2",accountID,transactionID).Scan(&entryID)).To(Succeed())
   DeferCleanup(func(){deleteReconciliationFixture(ctx,pool,accountID,transactionID)})
 
   writerTx,err:=pool.Begin(auditCtx)
