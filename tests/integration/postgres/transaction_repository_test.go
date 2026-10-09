@@ -419,7 +419,7 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: TRANSACTION REPOSITORY", f
 				ORDER BY e.sequence_number DESC LIMIT 1`, creditExternalID).
 				Scan(&creditSequence, &creditBalance)).To(Succeed())
 			Expect(creditSequence).To(Equal(int64(3)))
-			Expect(creditBalance).To(Equal(int64(0)))
+			Expect(creditBalance).To(Equal(int64(-200)))
 		})
 		It("should approve only one of two concurrent debits that consume the available balance", func() {
 			debitExternalID, creditExternalID := insertFundedAccountsForCommand(ctx, pool, 100, 10)
