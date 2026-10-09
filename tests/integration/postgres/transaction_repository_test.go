@@ -400,6 +400,26 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: TRANSACTION REPOSITORY", f
 			Expect(transactions).To(Equal(1))
 			Expect(entries).To(Equal(3))
 			Expect(outboxes).To(Equal(1))
+			// The losing request must not consume sequence numbers or change balances.
+			var debitSequence, debitBalance int64
+			Expect(pool.QueryRow(ctx, `
+				SELECT e.sequence_number, e.running_balance
+				FROM entries e JOIN accounts a ON a.id = e.account_id
+				WHERE a.account_external_id = $1
+				ORDER BY e.sequence_number DESC LIMIT 1`, debitExternalID).
+				Scan(&debitSequence, &debitBalance)).To(Succeed())
+			Expect(debitSequence).To(Equal(int64(2)))
+			Expect(debitBalance).To(Equal(int64(0)))
+
+			var creditSequence, creditBalance int64
+			Expect(pool.QueryRow(ctx, `
+				SELECT e.sequence_number, e.running_balance
+				FROM entries e JOIN accounts a ON a.id = e.account_id
+				WHERE a.account_external_id = $1
+				ORDER BY e.sequence_number DESC LIMIT 1`, creditExternalID).
+				Scan(&creditSequence, &creditBalance)).To(Succeed())
+			Expect(creditSequence).To(Equal(int64(3)))
+			Expect(creditBalance).To(Equal(int64(0)))
 		})
 		It("should approve only one of two concurrent debits that consume the available balance", func() {
 			debitExternalID, creditExternalID := insertFundedAccountsForCommand(ctx, pool, 100, 10)
