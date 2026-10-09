@@ -349,9 +349,11 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: TRANSACTION REPOSITORY", f
 			createTransaction := newIntegrationCreateTransaction(pool)
 			start := make(chan struct{})
 			results := make(chan commandResult, 2)
+			keys := make([]string, 0, 2)
 			var wg sync.WaitGroup
 			for range 2 {
 				key := "mc-" + uuid.NewString()
+				keys = append(keys, key)
 				amount := int64(100)
 				operation := string(transaction.OperationTransfer)
 				input := dto.CreateTransactionInput{
@@ -392,9 +394,9 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: TRANSACTION REPOSITORY", f
 			Expect(insufficientBalance).To(Equal(1))
 
 			var transactions, entries, outboxes int
-			Expect(pool.QueryRow(ctx, `SELECT count(*) FROM transactions WHERE idempotency_key LIKE 'mc-%'`).Scan(&transactions)).To(Succeed())
-			Expect(pool.QueryRow(ctx, `SELECT count(*) FROM entries WHERE transaction_id IN (SELECT id FROM transactions WHERE idempotency_key LIKE 'mc-%')`).Scan(&entries)).To(Succeed())
-			Expect(pool.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE aggregate_id IN (SELECT id::text FROM transactions WHERE idempotency_key LIKE 'mc-%')`).Scan(&outboxes)).To(Succeed())
+			Expect(pool.QueryRow(ctx, `SELECT count(*) FROM transactions WHERE idempotency_key = ANY($1)`, keys).Scan(&transactions)).To(Succeed())
+			Expect(pool.QueryRow(ctx, `SELECT count(*) FROM entries WHERE transaction_id IN (SELECT id FROM transactions WHERE idempotency_key = ANY($1))`, keys).Scan(&entries)).To(Succeed())
+			Expect(pool.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE aggregate_id IN (SELECT id::text FROM transactions WHERE idempotency_key = ANY($1))`, keys).Scan(&outboxes)).To(Succeed())
 			Expect(transactions).To(Equal(1))
 			Expect(entries).To(Equal(3))
 			Expect(outboxes).To(Equal(1))
