@@ -73,16 +73,16 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: UNIT OF WORK", func() {
 
 			assertLedgerRecords(ctx, pool, rolledBack.ID.String(), 0, 0, 0)
 		})
-		It("should roll back all repeated-account entries when the outbox write fails", func() {
+		It("should roll back four postings and the outbox event after a downstream failure", func() {
 			// Arrange: accounts are committed so the UoW can read them independently.
 			accountA, accountB := insertCommittedAccounts(ctx, pool)
 			entityTransaction := newMultiEntryTransaction(accountA, accountB)
 			defer cleanupCommittedAccounts(ctx, pool, []string{accountA, accountB}, []string{entityTransaction.ID.String()})
 			transactionRepo := repository.NewTransactionRepository(pool)
-			failure := errors.New("simulate failed outbox persistence")
+			outboxRepo := repository.NewOutBoxRepository(pool)
+			failure := errors.New("simulate downstream failure after outbox write")
 
-			// Act: persist the transaction and all four postings, then force a failure
-			// at the boundary where the outbox would be persisted.
+			// Act: persist transaction, four postings and the outbox event, then fail.
 			err := uow.NewUnitOfWork(pool).WithTransaction(ctx, func(txCtx context.Context) error {
 				if err := prepareTransactionLedger(ctx, txCtx, entityTransaction, pool); err != nil {
 					return err
@@ -102,7 +102,9 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: UNIT OF WORK", func() {
 				if count != 4 {
 					return errors.New("expected four entries before outbox failure")
 				}
-				// A simulated adapter failure must abort the same transaction.
+				if err := outboxRepo.Save(txCtx, newOutbox(entityTransaction.ID.String())); err != nil {
+					return err
+				}
 				return failure
 			})
 
