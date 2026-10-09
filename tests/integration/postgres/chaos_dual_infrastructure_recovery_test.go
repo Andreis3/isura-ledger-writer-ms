@@ -48,8 +48,6 @@ var _ = Describe("CHAOS :: SIMULTANEOUS POSTGRES AND NATS OUTAGE",func(){
   )
   Expect(err).NotTo(HaveOccurred())
   DeferCleanup(func(){
-   cleanupCtx,done:=context.WithTimeout(context.Background(),20*time.Second)
-   defer done()
    Expect(testcontainers.TerminateContainer(dbContainer)).To(Succeed())
   })
   dbURL,err:=dbContainer.ConnectionString(runCtx,"sslmode=disable")
