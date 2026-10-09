@@ -66,6 +66,10 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: LEDGER RECONCILIATION", fu
 			before := reconciliationSnapshot(ctx, pool, accountID)
 			auditTx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() {
+				rollbackErr := auditTx.Rollback(ctx)
+				Expect(rollbackErr == nil || errors.Is(rollbackErr, pgx.ErrTxClosed)).To(BeTrue())
+			})
 			report, err := repository.NewLedgerReconciliation(pool).Run(database.WithTx(ctx, auditTx))
 			Expect(err).NotTo(HaveOccurred())
 			Expect(auditTx.Rollback(ctx)).To(Succeed())
