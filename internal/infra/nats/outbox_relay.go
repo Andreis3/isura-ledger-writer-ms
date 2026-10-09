@@ -48,6 +48,9 @@ func NewOutboxRelay(repository outbox.Repository, js JetStreamPublisher, tracer 
 	if config.RetryAfter <= 0 {
 		config.RetryAfter = 5 * time.Second
 	}
+	if config.ShutdownTimeout <= 0 {
+		config.ShutdownTimeout = 10 * time.Second
+	}
 	workers := config.MaxWorkers
 	if workers <= 0 {
 		workers = 1
@@ -55,8 +58,8 @@ func NewOutboxRelay(repository outbox.Repository, js JetStreamPublisher, tracer 
 	return &OutboxRelay{repository: repository, jetstream: js, tracer: tracer, log: log, metrics: metrics, config: config, workers: workers}
 }
 
-// Run polls until ctx is canceled. publishBatch waits for every claimed item
-// before returning, so cancellation cannot leave this relay's workers running.
+// Run polls until ctx is canceled. A claimed batch gets a bounded drain period
+// on shutdown, after which active publish operations are canceled and awaited.
 func (r *OutboxRelay) Run(ctx context.Context) error {
 	ticker := time.NewTicker(r.config.PollInterval)
 	defer ticker.Stop()
@@ -83,25 +86,67 @@ func (r *OutboxRelay) PublishBatch(ctx context.Context) error {
 		return nil
 	}
 
+	batchCtx, finishBatch := r.batchContext(ctx)
+	defer finishBatch()
+
 	sem := make(chan struct{}, r.workers)
 	var wg sync.WaitGroup
-	for _, item := range items {
+itemsLoop:
+	for index, item := range items {
 		item := item
-		sem <- struct{}{}
+		if batchCtx.Err() != nil {
+			r.releaseUnstarted(items[index:])
+			break itemsLoop
+		}
+		select {
+		case sem <- struct{}{}:
+		case <-batchCtx.Done():
+			r.releaseUnstarted(items[index:])
+			break itemsLoop
+		}
+		if batchCtx.Err() != nil {
+			<-sem
+			r.releaseUnstarted(items[index:])
+			break itemsLoop
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			r.publishOne(ctx, item)
+			r.publishOne(batchCtx, item)
 		}()
 	}
 	wg.Wait()
 	return nil
 }
 
+func (r *OutboxRelay) batchContext(ctx context.Context) (context.Context, func()) {
+	batchCtx, cancelBatch := context.WithCancel(context.WithoutCancel(ctx))
+	batchDone := make(chan struct{})
+	drainDone := make(chan struct{})
+	go func() {
+		defer close(drainDone)
+		select {
+		case <-ctx.Done():
+			timer := time.NewTimer(r.config.ShutdownTimeout)
+			defer timer.Stop()
+			select {
+			case <-timer.C:
+				cancelBatch()
+			case <-batchDone:
+			}
+		case <-batchDone:
+		}
+	}()
+	return batchCtx, func() {
+		close(batchDone)
+		cancelBatch()
+		<-drainDone
+	}
+}
+
 func (r *OutboxRelay) publishOne(ctx context.Context, item *outbox.Outbox) {
-	workerCtx := context.WithoutCancel(ctx)
-	workerCtx, span := r.tracer.Start(workerCtx, "OutboxRelay.Publish")
+	workerCtx, span := r.tracer.Start(ctx, "OutboxRelay.Publish")
 	defer span.End()
 	start := time.Now()
 
@@ -118,13 +163,54 @@ func (r *OutboxRelay) publishOne(ctx context.Context, item *outbox.Outbox) {
 	}
 	if err != nil {
 		span.RecordError(err)
-		r.handleFailure(workerCtx, item, err)
+		if ctx.Err() != nil {
+			r.releaseForRetry(item, err)
+		} else {
+			r.handleFailure(workerCtx, item, err)
+		}
 	} else {
 		r.metrics.RecordOutboxTotal(string(outbox.Success), string(item.EventType))
 		r.metrics.RecordCommandTotal("OutboxRelay", "published")
 		r.log.InfoJSON("outbox event published", slog.String("outbox_id", item.ID.String()), slog.String("subject", msg.Subject))
 	}
 	r.metrics.RecordCommandDuration("OutboxRelay", float64(time.Since(start).Milliseconds()))
+}
+
+// releaseForRetry restores the attempt consumed by ClaimPending when shutdown
+// cancels an in-flight publish. ClaimPending already left the record FAILED,
+// so a failed cleanup still leaves it recoverable when attempts remain.
+func (r *OutboxRelay) releaseForRetry(item *outbox.Outbox, publishErr error) {
+	r.log.ErrorJSON("outbox publication canceled during shutdown", slog.String("outbox_id", item.ID.String()), slog.String("error", publishErr.Error()))
+	if item.Attempts <= 0 {
+		return
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	r.restoreAttempt(cleanupCtx, item)
+	r.metrics.RecordCommandTotal("OutboxRelay", "failed")
+	r.metrics.RecordOutboxTotal(string(outbox.Failed), string(item.EventType))
+}
+
+func (r *OutboxRelay) releaseUnstarted(items []*outbox.Outbox) {
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	for _, item := range items {
+		if cleanupCtx.Err() != nil {
+			return
+		}
+		r.restoreAttempt(cleanupCtx, item)
+	}
+}
+
+func (r *OutboxRelay) restoreAttempt(ctx context.Context, item *outbox.Outbox) {
+	if item.Attempts <= 0 {
+		return
+	}
+	if err := r.repository.UpdateOutboxData(ctx, item.ID, outbox.UpdateOutboxData{
+		Status: outbox.Failed, Attempts: item.Attempts - 1, LastAttemptAt: item.LastAttemptAt,
+	}); err != nil {
+		r.log.ErrorJSON("outbox retry state restoration failed", slog.String("outbox_id", item.ID.String()), slog.String("error", err.Error()))
+	}
 }
 
 func (r *OutboxRelay) handleFailure(ctx context.Context, item *outbox.Outbox, publishErr error) {

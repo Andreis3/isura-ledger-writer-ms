@@ -29,9 +29,9 @@ func run() (runErr error) {
 	ctx, cancel := context.WithTimeout(context.Background(), reconciliationTimeout)
 	defer cancel()
 
-	configuration := configs.LoadConfig()
-	if configuration == nil {
-		return errors.New("load PostgreSQL configuration from config.json or environment")
+	configuration, err := configs.LoadConfig()
+	if err != nil {
+		return fmt.Errorf("load configuration: %w", err)
 	}
 	pg, err := postgres.NewPostgresWithContext(ctx, configuration)
 	if err != nil {

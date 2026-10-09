@@ -31,7 +31,10 @@ func main() {
 }
 
 func run(apply bool) error {
-	configuration := configs.LoadConfig()
+	configuration, err := configs.LoadConfig()
+	if err != nil {
+		return fmt.Errorf("load configuration: %w", err)
+	}
 	connectionString, err := databaseURL(configuration)
 	if err != nil {
 		return err

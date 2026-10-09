@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"sync"
 	"time"
 
+	"github.com/andreis3/isura-ledger-ms/internal/application"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/event"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/dependency"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/factory"
@@ -20,9 +22,10 @@ import (
 )
 
 const (
-	DefaultRetryDelay = 5 * time.Second
-	MaxBackoffDelay   = 30 * time.Second
-	BackoffBase       = 2.0 // Base for exponential backoff calculation
+	DefaultRetryDelay  = 5 * time.Second
+	MaxBackoffDelay    = 30 * time.Second
+	BackoffBase        = 2.0 // Base for exponential backoff calculation
+	workerDrainTimeout = 15 * time.Second
 )
 
 type eventEnvelope struct {
@@ -58,6 +61,9 @@ func NewNatsConsumerServer(baseDeps *dependency.BaseDeps, publisher event.Publis
 
 func (c *NatsConsumerServer) Start(ctx context.Context) error {
 	start := time.Now()
+	workerCtx, cancelWorkers := context.WithCancel(context.WithoutCancel(ctx))
+	defer cancelWorkers()
+	var workers sync.WaitGroup
 
 	consumer, err := c.consumer(ctx)
 	if err != nil {
@@ -65,16 +71,27 @@ func (c *NatsConsumerServer) Start(ctx context.Context) error {
 	}
 
 	cc, err := consumer.Consume(func(msg jetstream.Msg) {
+		if ctx.Err() != nil {
+			if err := msg.Nak(); err != nil {
+				c.dep.Log.ErrorJSON("failed to negatively acknowledge message during shutdown", "error", err.Error())
+			}
+			return
+		}
+
 		select {
 		case c.semaphore <- struct{}{}:
+			if ctx.Err() != nil {
+				<-c.semaphore
+				if err := msg.Nak(); err != nil {
+					c.dep.Log.ErrorJSON("failed to negatively acknowledge message during shutdown", "error", err.Error())
+				}
+				return
+			}
+			workers.Add(1)
 			go func() {
+				defer workers.Done()
 				defer func() { <-c.semaphore }()
 
-				// Context Isolation!
-				// Prevents a SIGTERM signal from abruptly interrupting the query in Postgres.
-				workerCtx := context.WithoutCancel(ctx)
-
-				// Extracts the trace, injecting it into the workerCtx, which is immune to cancellation.
 				msgCtx := otel.GetTextMapPropagator().Extract(workerCtx, propagation.HeaderCarrier(msg.Headers()))
 
 				c.processJob(msgCtx, msg)
@@ -101,21 +118,33 @@ func (c *NatsConsumerServer) Start(ctx context.Context) error {
 
 	// Drains instead of stalling against brute force.
 	cc.Drain()
+	<-cc.Closed()
 
-	// Waits for ongoing goroutines to return slots to the semaphore, with a safety timeout
-	drainCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	for i := 0; i < c.maxWorkers; i++ {
-		select {
-		case c.semaphore <- struct{}{}:
-		case <-drainCtx.Done():
-			c.dep.Log.WarnText("Timeout aguardando drenagem dos workers do NATS. Forçando saída.")
-			break
-		}
-	}
+	waitForWorkers(&workers, cancelWorkers, workerDrainTimeout, c.dep.Log)
 
 	return nil
+}
+
+func waitForWorkers(workers *sync.WaitGroup, cancel context.CancelFunc, timeout time.Duration, log application.Logger) {
+	done := make(chan struct{})
+	go func() {
+		workers.Wait()
+		close(done)
+	}()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case <-done:
+		return
+	case <-timer.C:
+		log.WarnText("Timeout aguardando drenagem dos workers do NATS. Cancelando o processamento em voo.")
+		cancel()
+		// Do not return while workers may still be using dependencies that the
+		// server shutdown path closes after Start returns.
+		<-done
+	}
 }
 
 func (c *NatsConsumerServer) consumer(ctx context.Context) (jetstream.Consumer, error) {

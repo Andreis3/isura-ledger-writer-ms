@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/andreis3/isura-ledger-ms/internal/application"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/configs"
@@ -23,11 +24,13 @@ type BaseDeps struct {
 	TracerShutdown func(context.Context) error
 }
 
+const postgresStartupTimeout = 10 * time.Second
+
 func BuildBaseDeps() *BaseDeps {
-	cfg := configs.LoadConfig()
+	cfg, err := configs.LoadConfig()
 	log := logger.NewLogger()
-	if cfg == nil {
-		log.CriticalText("failed to load config")
+	if err != nil {
+		log.CriticalText("failed to load config", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 
@@ -37,7 +40,9 @@ func BuildBaseDeps() *BaseDeps {
 		os.Exit(1)
 	}
 
-	pg, err := postgres.NewPostgres(cfg)
+	postgresCtx, cancelPostgres := context.WithTimeout(context.Background(), postgresStartupTimeout)
+	defer cancelPostgres()
+	pg, err := postgres.NewPostgresWithContext(postgresCtx, cfg)
 	if err != nil {
 		log.CriticalText("failed to connect to database", slog.String("error", err.Error()))
 		os.Exit(1)
