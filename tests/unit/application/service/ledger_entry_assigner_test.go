@@ -41,9 +41,7 @@ var _ = Describe("INTERNAL :: APPLICATION :: SERVICE :: LEDGER ENTRY ASSIGNER", 
 				Expect(entrySequences(entityTransaction.Entries)).To(Equal([]int64{1, 1, 2, 2}))
 				Expect(entryBalances(entityTransaction.Entries)).To(Equal([]int64{1000, -600, 1500, -1500}))
 			})
-		})
 
-		Context("success cases", func() {
 			It("should continue sequences and balances from previously persisted account states", func() {
 				// Arrange.
 				ctx := context.Background()
