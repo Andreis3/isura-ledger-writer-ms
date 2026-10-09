@@ -536,7 +536,9 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: TRANSACTION REPOSITORY", f
 				`, uuid.NewString(), accountA, entityTransaction.ID.String(), time.Now())
 			var pgErr *pgconn.PgError
 			Expect(errors.As(err, &pgErr)).To(BeTrue())
+			Expect(pgErr.Code).To(Equal("23505"))
 			Expect(pgErr.ConstraintName).To(Equal("unique_entry_sequence_number"))
+			Expect(uow.IsConcurrencyConflict(err)).To(BeTrue())
 		})
 		It("should reconstruct a transfer from its append-only entries", func() {
 			accountA, accountB := insertAccounts(ctx, tx)
