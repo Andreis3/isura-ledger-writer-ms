@@ -119,6 +119,16 @@ var _ = Describe("INTERNAL :: POSTGRES :: RECONCILIATION INVARIANTS",func(){
   Expect(historical.count).To(Equal(1))
   Expect(historical.state.SequenceNumber).To(Equal(int64(1)))
  })
+ It("should accept an imported starting sequence and still reject a later gap",func(){
+  historical:=newState()
+  Expect(applyReconciliationEntry(historical,10,transaction.Debit,100,money.BRL)).To(Succeed())
+  Expect(historical.state.SequenceNumber).To(Equal(int64(10)))
+  Expect(applyReconciliationEntry(historical,11,transaction.Credit,20,money.BRL)).To(Succeed())
+  Expect(historical.state.RunningBalance).To(Equal(int64(80)))
+  err:=applyReconciliationEntry(historical,13,transaction.Debit,10,money.BRL)
+  Expect(err).To(MatchError(ContainSubstring("non-contiguous")))
+  Expect(historical.state.SequenceNumber).To(Equal(int64(11)))
+ })
  It("should reject duplicated ledger sequence",func(){
   historical:=newState()
   Expect(applyReconciliationEntry(historical,1,transaction.Debit,100,money.BRL)).To(Succeed())
