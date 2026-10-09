@@ -41,9 +41,66 @@ var _ = Describe("INTERNAL :: APPLICATION :: SERVICE :: LEDGER ENTRY ASSIGNER", 
 				Expect(entrySequences(entityTransaction.Entries)).To(Equal([]int64{1, 1, 2, 2}))
 				Expect(entryBalances(entityTransaction.Entries)).To(Equal([]int64{1000, -600, 1500, -1500}))
 			})
+
+			It("should continue sequences and balances from previously persisted account states", func() {
+				// Arrange.
+				ctx := context.Background()
+				debitAccount := newLedgerAccount("019ff448-c43d-70d3-83c7-dfa0674469b7", account.Asset)
+				creditAccount := newLedgerAccount("019ff448-c43d-70d3-83c7-dfa0674469b8", account.Asset)
+				repository := &transactionRepositoryFake{states: map[string]account.LedgerState{
+					debitAccount.ID.String():  {AccountID: debitAccount.ID.String(), SequenceNumber: 7, RunningBalance: 3000},
+					creditAccount.ID.String(): {AccountID: creditAccount.ID.String(), SequenceNumber: 4, RunningBalance: 2000},
+				}}
+				entityTransaction := newMultiEntryTransaction(debitAccount.ID.String(), creditAccount.ID.String())
+
+				// Act.
+				err := service.AssignLedgerEntries(ctx, repository, entityTransaction, debitAccount, creditAccount)
+
+				// Assert.
+				Expect(err).NotTo(HaveOccurred())
+				Expect(entryPositions(entityTransaction.Entries)).To(Equal([]int64{0, 1, 2, 3}))
+				Expect(entrySequences(entityTransaction.Entries)).To(Equal([]int64{8, 5, 9, 6}))
+				Expect(entryBalances(entityTransaction.Entries)).To(Equal([]int64{4000, 1400, 4500, 500}))
+			})
 		})
 
 		Context("error cases", func() {
+			It("should preserve every entry when loading the latest ledger state fails", func() {
+				// Arrange.
+				ctx := context.Background()
+				debitAccount := newLedgerAccount("019ff448-c43d-70d3-83c7-dfa0674469b7", account.Asset)
+				creditAccount := newLedgerAccount("019ff448-c43d-70d3-83c7-dfa0674469b8", account.Asset)
+				expectedErr := errors.New("ledger state temporarily unavailable")
+				repository := &transactionRepositoryFake{findErr: expectedErr}
+				entityTransaction := newMultiEntryTransaction(debitAccount.ID.String(), creditAccount.ID.String())
+
+				// Act.
+				err := service.AssignLedgerEntries(ctx, repository, entityTransaction, debitAccount, creditAccount)
+
+				// Assert.
+				Expect(errors.Is(err, expectedErr)).To(BeTrue())
+				Expect(entrySequences(entityTransaction.Entries)).To(Equal([]int64{0, 0, 0, 0}))
+				Expect(entryBalances(entityTransaction.Entries)).To(Equal([]int64{0, 0, 0, 0}))
+			})
+
+			It("should reject a transaction with an unknown account without partial assignment", func() {
+				// Arrange.
+				ctx := context.Background()
+				debitAccount := newLedgerAccount("019ff448-c43d-70d3-83c7-dfa0674469b7", account.Asset)
+				creditAccount := newLedgerAccount("019ff448-c43d-70d3-83c7-dfa0674469b8", account.Asset)
+				repository := &transactionRepositoryFake{states: map[string]account.LedgerState{
+					debitAccount.ID.String(): {AccountID: debitAccount.ID.String()},
+				}}
+				entityTransaction := newMultiEntryTransaction(debitAccount.ID.String(), creditAccount.ID.String())
+
+				// Act.
+				err := service.AssignLedgerEntries(ctx, repository, entityTransaction, debitAccount)
+
+				// Assert.
+				Expect(err).To(HaveOccurred())
+				Expect(entrySequences(entityTransaction.Entries)).To(Equal([]int64{0, 0, 0, 0}))
+				Expect(entryBalances(entityTransaction.Entries)).To(Equal([]int64{0, 0, 0, 0}))
+			})
 			It("should stop before assigning an entry that violates the account balance policy", func() {
 				ctx := context.Background()
 				otherAccount := newLedgerAccount("019ff448-c43d-70d3-83c7-dfa0674469b7", account.Asset)
@@ -69,6 +126,7 @@ var _ = Describe("INTERNAL :: APPLICATION :: SERVICE :: LEDGER ENTRY ASSIGNER", 
 type transactionRepositoryFake struct {
 	states    map[string]account.LedgerState
 	findOrder []string
+	findErr   error
 }
 
 func (f *transactionRepositoryFake) Save(context.Context, *transaction.Transaction) error {
@@ -85,6 +143,9 @@ func (f *transactionRepositoryFake) ExistsByIdempotencyKey(context.Context, stri
 
 func (f *transactionRepositoryFake) FindLatestLedgerState(_ context.Context, accountID string) (int64, int64, error) {
 	f.findOrder = append(f.findOrder, accountID)
+	if f.findErr != nil {
+		return 0, 0, f.findErr
+	}
 	state := f.states[accountID]
 	return state.SequenceNumber, state.RunningBalance, nil
 }
