@@ -51,14 +51,29 @@ var _ = Describe("INTEGRATION :: POSTGRES :: OUTBOX CRASH RECOVERY",func(){
  It("should stop reclaiming events when retry budget has been exhausted",func(){
   repo:=repository.NewOutBoxRepository(pool)
   txCtx:=database.WithTx(ctx,tx)
+
+  // ClaimPending has no aggregate filter: isolate this test from committed
+  // outbox records created by other integration specs. The deletion rolls
+  // back with the surrounding suite transaction.
+  _,err:=tx.Exec(ctx,"DELETE FROM outbox_events")
+  Expect(err).NotTo(HaveOccurred())
+
   item:=newOutbox("exhausted-recovery-test")
   Expect(repo.Save(txCtx,item)).To(Succeed())
+
   for attempt:=1;attempt<=outbox.MaxAttempts;attempt++{
    claimed,err:=repo.ClaimPending(txCtx,1,outbox.MaxAttempts,0)
    Expect(err).NotTo(HaveOccurred())
    Expect(claimed).To(HaveLen(1))
+   Expect(claimed[0].ID).To(Equal(item.ID))
+   Expect(claimed[0].Status).To(Equal(outbox.Failed))
    Expect(claimed[0].Attempts).To(Equal(attempt))
   }
+
+  var attempts int
+  Expect(tx.QueryRow(ctx,"SELECT attempts FROM outbox_events WHERE id=$1",item.ID.String()).Scan(&attempts)).To(Succeed())
+  Expect(attempts).To(Equal(outbox.MaxAttempts))
+
   exhausted,err:=repo.ClaimPending(txCtx,1,outbox.MaxAttempts,0)
   Expect(err).NotTo(HaveOccurred())
   Expect(exhausted).To(BeEmpty())
