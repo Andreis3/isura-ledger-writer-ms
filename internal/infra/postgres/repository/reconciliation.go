@@ -154,9 +154,13 @@ func applyReconciliationEntry(historical *reconciliationAccount, sequence int64,
 	if err != nil {
 		return fmt.Errorf("build amount: %w", err)
 	}
-	if sequence != historical.state.SequenceNumber+1 {
- return fmt.Errorf("non-contiguous entry sequence: got %d, expected %d", sequence, historical.state.SequenceNumber+1)
- }
+	// Some imported/historical streams have an initial sequence greater than one.
+	// Without an explicit opening checkpoint it is impossible to determine whether
+	// earlier entries were archived or are missing. Validate only gaps between
+	// successive entries actually present in this snapshot.
+	if historical.count > 0 && sequence != historical.state.SequenceNumber+1 {
+		return fmt.Errorf("non-contiguous entry sequence: got %d, expected %d", sequence, historical.state.SequenceNumber+1)
+	}
  state, err := historical.account.ApplyHistoricalEntry(historical.state, direction, entryAmount)
 	if err != nil {
 		return err
