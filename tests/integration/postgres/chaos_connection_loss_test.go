@@ -46,7 +46,7 @@ var _ = Describe("CHAOS :: POSTGRES :: CONNECTION LOSS",func(){
   Expect(count).To(BeZero(),"an uncommitted transaction must not survive connection loss")
 
   // Verify normal transactions work after the connection is replaced.
-  recoveryKey:="chaos-recovered-"+uuid.NewString()
+  recoveryKey:="chaos-ok-"+uuid.NewString()
   _,err=pool.Exec(testCtx,`
    INSERT INTO transactions
      (id,idempotency_key,request_fingerprint,status,operation,amount,currency,created_at,updated_at)
