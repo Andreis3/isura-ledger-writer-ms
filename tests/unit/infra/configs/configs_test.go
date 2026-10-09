@@ -5,6 +5,7 @@ package configs_test
 import (
 	"errors"
 	"os"
+	"time"
 
 	"github.com/andreis3/isura-ledger-ms/internal/application"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/configs"
@@ -33,6 +34,15 @@ var _ = Describe("INTERNAL :: INFRA :: CONFIGS :: CONFIGS", func() {
 				Expect(err).NotTo(HaveOccurred())
 				Expect(loaded).NotTo(BeNil())
 				Expect(loaded.Transaction.MaxEntries).To(Equal(23))
+			})
+
+			It("should use the configured outbox shutdown timeout from the environment", func() {
+				GinkgoT().Setenv("NATS_RELAY_SHUTDOWN_TIMEOUT", "3s")
+
+				loaded, err := configs.LoadConfig()
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(loaded.Nats.Relay.ShutdownTimeout).To(Equal(3 * time.Second))
 			})
 		})
 

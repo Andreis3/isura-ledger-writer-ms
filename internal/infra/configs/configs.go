@@ -154,4 +154,5 @@ func bindEnvs(config *viper.Viper) {
 	_ = config.BindEnv("nats.relay.max_attempts", "NATS_RELAY_MAX_ATTEMPTS")
 	_ = config.BindEnv("nats.relay.poll_interval", "NATS_RELAY_POLL_INTERVAL")
 	_ = config.BindEnv("nats.relay.retry_after", "NATS_RELAY_RETRY_AFTER")
+	_ = config.BindEnv("nats.relay.shutdown_timeout", "NATS_RELAY_SHUTDOWN_TIMEOUT")
 }
