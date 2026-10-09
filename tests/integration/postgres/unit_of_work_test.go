@@ -73,6 +73,51 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: UNIT OF WORK", func() {
 
 			assertLedgerRecords(ctx, pool, rolledBack.ID.String(), 0, 0, 0)
 		})
+		It("should roll back four postings and the outbox event after a downstream failure", func() {
+			// Arrange: accounts are committed so the UoW can read them independently.
+			accountA, accountB := insertCommittedAccounts(ctx, pool)
+			entityTransaction := newMultiEntryTransaction(accountA, accountB)
+			defer cleanupCommittedAccounts(ctx, pool, []string{accountA, accountB}, []string{entityTransaction.ID.String()})
+			transactionRepo := repository.NewTransactionRepository(pool)
+			outboxRepo := repository.NewOutBoxRepository(pool)
+			failure := errors.New("simulate downstream failure after outbox write")
+
+			// Act: persist transaction, four postings and the outbox event, then fail.
+			err := uow.NewUnitOfWork(pool).WithTransaction(ctx, func(txCtx context.Context) error {
+				if err := prepareTransactionLedger(ctx, txCtx, entityTransaction, pool); err != nil {
+					return err
+				}
+				if err := transactionRepo.Save(txCtx, entityTransaction); err != nil {
+					return err
+				}
+				// Ensure the postings exist inside the active database transaction.
+				transactionTx, ok := database.ExtractTx(txCtx)
+				if !ok {
+					return errors.New("missing active unit of work transaction")
+				}
+				var count int
+				if err := transactionTx.QueryRow(ctx, "SELECT count(*) FROM entries WHERE transaction_id = $1", entityTransaction.ID.String()).Scan(&count); err != nil {
+					return err
+				}
+				if count != 4 {
+					return errors.New("expected four entries before outbox failure")
+				}
+				if err := outboxRepo.Save(txCtx, newOutbox(entityTransaction.ID.String())); err != nil {
+					return err
+				}
+				return failure
+			})
+
+			// Assert: no transaction, posting, or event leaks past rollback.
+			Expect(errors.Is(err, failure)).To(BeTrue())
+			assertLedgerRecords(ctx, pool, entityTransaction.ID.String(), 0, 0, 0)
+			for _, accountID := range []string{accountA, accountB} {
+				var count int
+				Expect(pool.QueryRow(ctx, "SELECT count(*) FROM entries WHERE account_id = $1", accountID).Scan(&count)).To(Succeed())
+				Expect(count).To(BeZero())
+			}
+		})
+
 		It("should roll back transaction, entries and outbox together", func() {
 			accountA, accountB := insertAccounts(ctx, tx)
 			entityTransaction := newTransaction(accountA, accountB)
