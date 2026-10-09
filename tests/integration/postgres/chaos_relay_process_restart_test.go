@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -91,6 +92,25 @@ func TestChaosRelayChild(t *testing.T) {
 	}
 }
 
+// lockedStderrBuffer is safe to read while os/exec is still copying
+// a subprocess's stderr into it on a background goroutine.
+type lockedStderrBuffer struct {
+	mu sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (b *lockedStderrBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.Write(p)
+}
+
+func (b *lockedStderrBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buffer.String()
+}
+
 var _ = Describe("CHAOS :: REAL OUTBOX RELAY PROCESS RESTART", func() {
 	It("recovers a claimed event after SIGKILL and publishes once through real JetStream", func() {
 		testCtx, cancel := context.WithTimeout(ctx, 65*time.Second)
@@ -132,7 +152,7 @@ var _ = Describe("CHAOS :: REAL OUTBOX RELAY PROCESS RESTART", func() {
 			Expect(cleanupErr).NotTo(HaveOccurred())
 		})
 
-		start := func(mode string) (*exec.Cmd, io.WriteCloser, *bufio.Reader, *bytes.Buffer) {
+		start := func(mode string) (*exec.Cmd, io.WriteCloser, *bufio.Reader, *lockedStderrBuffer) {
 			cmd := exec.CommandContext(testCtx, os.Args[0], "-test.run=^TestChaosRelayChild$")
 			cmd.Env = append(os.Environ(), "ISURA_RELAY_CHILD=1", "ISURA_RELAY_MODE="+mode,
 				"ISURA_RELAY_PG_DSN="+pool.Config().ConnString(), "ISURA_RELAY_NATS="+url, "ISURA_RELAY_EVENT="+item.ID.String())
@@ -140,7 +160,7 @@ var _ = Describe("CHAOS :: REAL OUTBOX RELAY PROCESS RESTART", func() {
 			Expect(pipeErr).NotTo(HaveOccurred())
 			stdout, pipeErr := cmd.StdoutPipe()
 			Expect(pipeErr).NotTo(HaveOccurred())
-			stderr := new(bytes.Buffer)
+			stderr := new(lockedStderrBuffer)
 			cmd.Stderr = stderr
 			Expect(cmd.Start()).To(Succeed())
 			DeferCleanup(func() {
