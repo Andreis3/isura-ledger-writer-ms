@@ -21,7 +21,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Run unit suites with race detector
-        run: go run github.com/onsi/ginkgo/v2/ginkgo -r --no-color --race --tags=unit --randomize-all --randomize-suites --fail-on-pending ./tests/unit/... ./internal/infra/nats/... ./internal/infra/postgres/uow/... ./internal/infra/postgres/repository/... ./cmd/backfill
+        run: go test -race -count=1 -tags=unit ./tests/unit/... ./internal/infra/nats/... ./internal/infra/postgres/uow/... ./internal/infra/postgres/repository/... ./cmd/backfill
 
   business-coverage:
     name: Business coverage >= 90%
