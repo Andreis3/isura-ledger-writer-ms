@@ -36,7 +36,7 @@ help:
 	@echo "   make vet              - Executa análise estática no entrypoint do servidor"
 	@echo ""
 	@echo " [ Testes Integração ]"
-	@echo "   make integration-tests - Roda os testes unitários básicos"
+	@echo "   make integration-tests - Roda os testes de integração\n\t@echo "   make integration-concurrency-repeat - Repete testes de concorrência no PostgreSQL""
 	@echo ""
 	@echo " [ Testes de Carga (Vegeta) ]"
 	@echo "   make test-load        - Roda teste de carga (Variáveis: PATH_VEGETA, URL, RATE, CONNECTIONS, WORKERS, DURATION) "
@@ -95,6 +95,11 @@ unit-report:
 
 integration-tests:
 	@go test ./tests/integration/... --tags=integration -v -count=1
+
+# Repeats the actual concurrent PostgreSQL scenarios against fresh Testcontainers.
+CONCURRENCY_REPEATS ?= 5
+integration-concurrency-repeat:
+	@CONCURRENCY_REPEATS=$(CONCURRENCY_REPEATS) bash scripts/test-concurrency-repeat.sh
 
 vet:
 	@go vet ./cmd/server/main.go
@@ -184,4 +189,5 @@ reconcile-balances:
 		test-load,
 		help,
 		vet,
-		integration-tests
+		integration-tests,
+		integration-concurrency-repeat
