@@ -100,3 +100,50 @@ var _ = Describe("ledger reconciliation replay", func() {
 		Expect(historical.count).To(BeZero())
 	})
 })
+
+var _ = Describe("INTERNAL :: POSTGRES :: RECONCILIATION INVARIANTS",func(){
+ const id="018f5a2a-7e11-7c21-9c12-234567890abc"
+ newState:=func()*reconciliationAccount{
+  aid,err:=entity.NewID(id)
+  Expect(err).NotTo(HaveOccurred())
+  return &reconciliationAccount{
+   account:account.Account{ID:aid,AccountType:account.Asset,BalancePolicy:account.BalanceUnrestricted,Currency:money.BRL},
+   state:account.LedgerState{AccountID:id},
+  }
+ }
+ It("should detect a missing ledger sequence",func(){
+  historical:=newState()
+  Expect(applyReconciliationEntry(historical,1,transaction.Debit,100,money.BRL)).To(Succeed())
+  err:=applyReconciliationEntry(historical,3,transaction.Credit,20,money.BRL)
+  Expect(err).To(MatchError(ContainSubstring("non-contiguous")))
+  Expect(historical.count).To(Equal(1))
+  Expect(historical.state.SequenceNumber).To(Equal(int64(1)))
+ })
+ It("should accept an imported starting sequence and still reject a later gap",func(){
+  historical:=newState()
+  Expect(applyReconciliationEntry(historical,10,transaction.Debit,100,money.BRL)).To(Succeed())
+  Expect(historical.state.SequenceNumber).To(Equal(int64(10)))
+  Expect(applyReconciliationEntry(historical,11,transaction.Credit,20,money.BRL)).To(Succeed())
+  Expect(historical.state.RunningBalance).To(Equal(int64(80)))
+  err:=applyReconciliationEntry(historical,13,transaction.Debit,10,money.BRL)
+  Expect(err).To(MatchError(ContainSubstring("non-contiguous")))
+  Expect(historical.state.SequenceNumber).To(Equal(int64(11)))
+ })
+ It("should reject duplicated ledger sequence",func(){
+  historical:=newState()
+  Expect(applyReconciliationEntry(historical,1,transaction.Debit,100,money.BRL)).To(Succeed())
+  Expect(applyReconciliationEntry(historical,1,transaction.Debit,100,money.BRL)).To(MatchError(ContainSubstring("non-contiguous")))
+ })
+ It("should report an intermediate corrupted running balance even if the last entry matches",func(){
+  historical:=newState()
+  Expect(applyReconciliationEntry(historical,1,transaction.Debit,100,money.BRL)).To(Succeed())
+  compareReconciliationBalance(historical,120)
+  Expect(applyReconciliationEntry(historical,2,transaction.Credit,30,money.BRL)).To(Succeed())
+  compareReconciliationBalance(historical,70)
+  report:=buildReconciliationReport(map[string]*reconciliationAccount{id:historical})
+  Expect(report.Reconciled).To(BeFalse())
+  Expect(report.MismatchCount).To(Equal(1))
+  Expect(report.Mismatches[0].ExpectedBalance).To(Equal(int64(100)))
+  Expect(report.Mismatches[0].PersistedBalance).To(Equal(int64(120)))
+ })
+})

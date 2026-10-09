@@ -40,6 +40,8 @@ type reconciliationAccount struct {
 	state   account.LedgerState
 	count   int
 	latest  int64
+ mismatch bool
+ expectedAtMismatch int64
 }
 
 type LedgerReconciliation struct {
@@ -139,7 +141,7 @@ func (r *LedgerReconciliation) replayEntries(ctx context.Context, accounts map[s
 		if err := applyReconciliationEntry(historical, sequence.Int64, transaction.Direction(direction.String), amount.Int64, money.Currency(currency.String)); err != nil {
 			return ReconciliationReport{}, fmt.Errorf("replay entry for account %q sequence %d: %w", accountID.String, sequence.Int64, err)
 		}
-		historical.latest = persisted.Int64
+		compareReconciliationBalance(historical, persisted.Int64)
 	}
 	if err := rows.Err(); err != nil {
 		return ReconciliationReport{}, fmt.Errorf("iterate entries for reconciliation: %w", err)
@@ -152,7 +154,14 @@ func applyReconciliationEntry(historical *reconciliationAccount, sequence int64,
 	if err != nil {
 		return fmt.Errorf("build amount: %w", err)
 	}
-	state, err := historical.account.ApplyHistoricalEntry(historical.state, direction, entryAmount)
+	// Some imported/historical streams have an initial sequence greater than one.
+	// Without an explicit opening checkpoint it is impossible to determine whether
+	// earlier entries were archived or are missing. Validate only gaps between
+	// successive entries actually present in this snapshot.
+	if historical.count > 0 && sequence != historical.state.SequenceNumber+1 {
+		return fmt.Errorf("non-contiguous entry sequence: got %d, expected %d", sequence, historical.state.SequenceNumber+1)
+	}
+ state, err := historical.account.ApplyHistoricalEntry(historical.state, direction, entryAmount)
 	if err != nil {
 		return err
 	}
@@ -176,12 +185,12 @@ func buildReconciliationReport(accounts map[string]*reconciliationAccount) Recon
 	for _, id := range accountIDs {
 		historical := accounts[id]
 		report.EntriesChecked += historical.count
-		if historical.count == 0 || historical.state.RunningBalance == historical.latest {
+		if historical.count == 0 || (!historical.mismatch && historical.state.RunningBalance == historical.latest) {
 			continue
 		}
 		report.Mismatches = append(report.Mismatches, ReconciliationMismatch{
 			AccountID: id, EntriesChecked: historical.count,
-			ExpectedBalance:  historical.state.RunningBalance,
+			ExpectedBalance:  historicalExpectedBalance(historical),
 			PersistedBalance: historical.latest,
 			Currency:         string(historical.account.Currency),
 		})
@@ -189,4 +198,20 @@ func buildReconciliationReport(accounts map[string]*reconciliationAccount) Recon
 	report.MismatchCount = len(report.Mismatches)
 	report.Reconciled = report.MismatchCount == 0
 	return report
+}
+
+// historicalExpectedBalance keeps the first corrupted intermediate entry visible
+// even when subsequent entries happen to converge to the expected final balance.
+func historicalExpectedBalance(a *reconciliationAccount) int64 {
+ if a.mismatch { return a.expectedAtMismatch }
+ return a.state.RunningBalance
+}
+
+func compareReconciliationBalance(h *reconciliationAccount, persisted int64) {
+ if !h.mismatch && h.state.RunningBalance != persisted {
+  h.mismatch = true
+  h.expectedAtMismatch = h.state.RunningBalance
+  h.latest = persisted
+ }
+ if !h.mismatch { h.latest = persisted }
 }
