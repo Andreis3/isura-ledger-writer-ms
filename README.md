@@ -1,4 +1,4 @@
-# isura-ledger-ms
+# isura-ledger-writer-ms
 
 The double-entry accounting engine of Isura Bank. **Every financial movement goes through here.**
 
@@ -199,11 +199,11 @@ return c.uow.WithRetryableTransaction(ctx, func(ctxTx context.Context) error {
 
 ### Running balance and concurrency trade-offs
 
-Each `Entry` stores its **own immutable `running_balance`** and `sequence_number`, both calculated on the write path. The latest entry for an account is the operational source of its balance. **The normal posting path does not `UPDATE` a single balance row per posting**: it inserts new entries. A separate existing `balances` table supports a legacy/bootstrap flow and is not the transactional balance authority. Historical backfill is an explicitly separate maintenance path.
+Each `Entry` stores its **own immutable `running_balance`** and `sequence_number`, both calculated on the write path. The entry with the **highest `sequence_number` for an account** is the operational source of its balance. This assumes that each committed posting is sequenced and its stored balance accounts for all earlier committed postings. A gap alone does not mathematically invalidate a latest balance if it is a deliberate, accounted-for gap; however, the current reconciliation routine treats **gaps between successive persisted entries** as an error. An imported stream may start above sequence 1 when its earlier opening history is unavailable. Retroactive inserts or changes to historical postings require explicit recalculation/reconciliation of affected running balances. **The normal posting path does not `UPDATE` a single balance row per posting**: it inserts new entries. A separate existing `balances` table supports a legacy/bootstrap flow and is not the transactional balance authority. Historical backfill is an explicitly separate maintenance path.
 
 This approach allows deterministic per-account reconstruction and efficient latest-balance lookups, at the cost of write-side sequencing and contention for **hot accounts** (for example a shared settlement account). Distinct transactions can contend even without balance-row updates because they compete for the next account sequence and serializable validation.
 
-The Unit of Work uses PostgreSQL `SERIALIZABLE` transactions. The write path obtains the latest ledger state and assigns a new per-account sequence; `UNIQUE(account_id, sequence_number)` provides a final conflict guard. Supported serialization/concurrency conflicts are retried with bounded exponential backoff and jitter (default maximum **5 attempts**). Under sustained contention, requests can still fail after retries; these failures should be monitored. A balance cache or checkpoint is an architectural alternative, **not** the source of truth in the current normal write path.
+The Unit of Work uses PostgreSQL `SERIALIZABLE` transactions. The write path obtains the latest ledger state and assigns a new per-account sequence; `UNIQUE(account_id, sequence_number)` provides a final conflict guard. Supported serialization/concurrency conflicts are retried with bounded exponential backoff and jitter (default maximum **5 attempts**). After the default five retry attempts are exhausted, the Unit of Work returns a **transaction conflict** (wrapping `ErrMaxRetriesExceeded`); it does not enqueue the unsuccessful financial write in the Outbox. Callers may retry the same business request using the **same idempotency key and identical payload**, respecting backoff; a different payload with that key is a conflict. In ambiguous-commit situations the application checks by idempotency key, but if that check cannot establish the result it returns an uncertain outcome rather than claiming a rollback. Under sustained contention, such failures should be monitored. A balance cache or checkpoint is an architectural alternative, **not** the source of truth in the current normal write path.
 
 ### Outbox delivery semantics
 
@@ -216,6 +216,84 @@ The delivery contract is **at least once**, not end-to-end exactly once. A relay
 Accounts record their currency, and transaction entries must be in one matching currency: **a single current transaction cannot post entries in multiple currencies**. The system supports currency-specific amounts, not an implemented cross-currency/FX booking model. FX would require explicit conversion/rate records and additional accounting invariants.
 
 The repository contains a ledger reconciliation routine that replays account entries and checks persisted running balances. This is distinct from **end-of-period accounting close**, which is not established as implemented here. Period closing, retention policies, operational SLAs, backup schedules and PostgreSQL point-in-time recovery (PITR) targets must be separately defined before production readiness claims.
+
+### Balance reconciliation: execution and response
+
+Run **`make reconcile-balances`** (equivalent to `go run ./cmd/reconcile`) against the configured Writer PostgreSQL instance. This is a manually invoked command in this repository: no recurring schedule, cron, or alerting pipeline is implied.
+
+The command opens a **read-only REPEATABLE READ transaction** with a five-minute context timeout, replays the account ledger in sequence order, and emits a JSON report with counts and any recorded balance mismatches. It returns a nonzero exit status if the reconciliation report is not reconciled or if validation/querying fails (including an unexpected internal sequence gap). **It does not repair balances**, emit corrective ledger postings, or close a fiscal period. On-call response to any discrepancy should preserve evidence and investigate the affected account and sequence before a separately approved correction/backfill.
+
+### Failure modes and recovery
+
+| Failure scenario | Expected Writer behavior | Recovery / operator action |
+|---|---|---|
+| PostgreSQL unavailable before or during a write | The command fails; an uncommitted UoW cannot create a partial transaction/movement/entry/Outbox set. | Restore database connectivity; retry with the **same** idempotency key. |
+| Commit response lost / commit outcome ambiguous | The command attempts a bounded lookup by idempotency key and fingerprint; if inconclusive it reports an uncertain outcome rather than assuming failure. | Check the persisted transaction before retrying; use the original key/payload, never a fresh key for the same business action. |
+| Hot-account conflict / serialization retry exhaustion | Serializable transaction is retried with backoff, then returns a transaction-conflict error after the bounded budget; no Outbox item is committed for a rejected attempt. | Back off and retry the same request/key; investigate account contention and retry metrics if persistent. |
+| NATS JetStream unavailable after DB commit | Financial data and Outbox record remain committed; the relay records a failed publish attempt when possible. | Restore NATS; inspect Outbox failures and retry policy; inspect the DLQ when configured and maximum publish attempts are reached. |
+| Relay stops after broker publish but before DB success update | JetStream may already hold the event while Outbox still requires another attempt. | Restart/retry relay; consumers must deduplicate on stable `event_id` because delivery is at least once. |
+| Reader receives a duplicate or out-of-order event | The Writer's committed ledger remains authoritative; projection correctness is the consumer's responsibility. | Reader deduplicates, detects gaps per account via `sequence_number`, and only advances a projection when prerequisites are satisfied. |
+| Reconciliation finds a mismatch or internal sequence gap | Read-only audit reports the inconsistency or fails validation; no automatic correction occurs. | Investigate and preserve evidence; use a separately approved recovery/correction procedure. |
+
+These are **implementation semantics**, not an operational SLA or a guarantee of automated restoration. Confirm monitoring thresholds, retention, DLQ handling, runbooks and recovery exercises separately.
+
+### Event schema evolution for the Java Reader
+
+The current internal NATS payload is the JSON `TransactionCreated` event, produced from the Go domain definition in `internal/domain/transaction/event.go`. The current producer sets **`event_version: 1`**, and the Outbox payload carries `event_id`, transaction fields, ordered `entries` (including account `sequence_number`, `running_balance`, and `movement_id`), and `movements` (type, description, and `entry_ids`).
+
+**Proposed compatibility policy** for the future independently deployed Java Reader:
+
+- Treat a published event version as an immutable contract; never silently change the meaning or units of existing fields.
+- Prefer additive, optional fields for backward-compatible changes; consumers must ignore unknown optional fields.
+- For incompatible changes, introduce a new explicit version and migration plan (support a transition period or separate event subject if necessary).
+- Publish a language-neutral canonical contract (JSON Schema/AsyncAPI, plus producer-consumer compatibility tests) before connecting the Java Reader. The Go struct is currently the implementation source; a shared schema registry or formal language-neutral contract is **not yet established**.
+- The Reader must persist processed `event_id` values, enforce per-account entry ordering, and acknowledge messages only after its own projection transaction commits.
+
+This policy is **documentation of the intended integration contract**, not an assertion that schema registry, contract validation, or the Reader already exist.
+
+### Write path sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Client as Client
+    participant API as gRPC / HTTP
+    participant UseCase as CreateTransaction (Go)
+    participant DB as PostgreSQL Writer
+    participant Relay as Outbox Relay
+    participant NATS as NATS JetStream
+    participant Reader as Reader (planned, Java)
+
+    Client->>API: CreateTransaction + idempotency_key
+    API->>UseCase: Validate intent, entries and movements
+    UseCase->>DB: BEGIN SERIALIZABLE
+    UseCase->>DB: Check idempotency key and load account ledger state
+    UseCase->>UseCase: Validate balances, sequence postings, balance movements
+    UseCase->>DB: INSERT transactions, movements, entries, outbox
+    alt Commit succeeds
+        UseCase->>DB: COMMIT
+        DB-->>UseCase: Committed
+        UseCase-->>API: Transaction ID / replay flag
+        API-->>Client: Response
+        Relay->>DB: Claim pending outbox (polling)
+        Relay->>NATS: Publish with Nats-Msg-Id
+        NATS-->>Relay: Publish acknowledgment
+        Relay->>DB: Mark outbox SUCCESS
+        opt Future Reader deployed
+            NATS-->>Reader: TransactionCreated (at least once)
+            Reader->>Reader: Deduplicate and sequence projections
+        end
+    else Rollback or conflict
+        UseCase->>DB: ROLLBACK
+        UseCase-->>API: Error or retryable conflict
+        API-->>Client: Failure (same key safe for retry)
+    else Commit outcome unknown
+        UseCase->>DB: Lookup by idempotency key
+        DB-->>UseCase: Found or inconclusive
+        UseCase-->>API: Replay result or uncertain outcome
+        API-->>Client: Result requiring careful retry
+    end
+```
 
 ### Production-readiness decisions still required
 
@@ -238,8 +316,8 @@ The Go Writer owns the authoritative accounting data in PostgreSQL. A separate J
 
 | Layer | Technology                          |
 |---|-------------------------------------|
-| Transport | gRPC + Protobuf                     |
-| Language | Go 1.26.x                           |
+| Transport | gRPC + Protobuf for RPC; HTTP/Chi for application routes, health, metrics and diagnostics |
+| Language | Go 1.26.5 (as declared in `go.mod`) |
 | Persistence | PostgreSQL 18 + pgx/v5              |
 | Migrations | Atlas                               |
 | Events | NATS JetStream (Transactional Outbox) |
@@ -264,7 +342,7 @@ github.com/prometheus/client_golang # Prometheus metrics
 
 ### Prerequisites
 
-- Go 1.26.4+
+- Go 1.26.5+ (per `go.mod`; install a compatible toolchain)
 - Docker and Docker Compose
 - `atlas` CLI for schema changes
 
@@ -293,6 +371,7 @@ make migrate         # apply the Atlas schema
 make unit            # run unit tests
 make integration-tests # run integration tests
 make chaos-tests      # run PostgreSQL/NATS failure recovery scenarios
+make reconcile-balances # read-only ledger balance reconciliation (JSON report)
 make unit-cover-business # measure application/domain test coverage
 make proto-lint      # lint protobuf contracts
 make proto-gen       # regenerate protobuf files
@@ -391,6 +470,10 @@ After commit, the Outbox relay publishes the `TransactionCreated` JSON payload t
 The event provides the association needed for the future Reader to produce statements. Downstream consumers must tolerate duplicate delivery and handle account ordering/gaps; event persistence in the Outbox does not by itself guarantee indefinite replay retention.
 
 ---
+
+## Transport responsibilities
+
+The Writer exposes its financial RPC contract through gRPC/Protobuf and also has an HTTP/Chi server for REST application routes, operational health checks, metrics and diagnostics. The documented HTTP port is not just a substitute transport for gRPC; see the routes registered in `internal/transport/rest/setup.go`.
 
 ## gRPC API
 
