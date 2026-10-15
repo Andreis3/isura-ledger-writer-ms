@@ -2,7 +2,7 @@
 
 The double-entry accounting engine of Isura Bank. **Every financial movement goes through here.**
 
-This service is the financial source of truth — it records all debit and credit entries, maintains real-time account balances, guarantees atomic double-entry bookkeeping, and publishes domain events reliably via the Transactional Outbox pattern.
+This service is the financial source of truth: it stores immutable debit/credit entries and their per-account running balances, groups postings into balanced business movements, enforces atomic bookkeeping, and publishes committed events reliably through the Transactional Outbox pattern.
 
 ---
 
@@ -13,12 +13,13 @@ This service is the financial source of truth — it records all debit and credi
 - Transaction idempotency via `idempotency_key` with `UNIQUE CONSTRAINT`
 - Reliable event publishing via Transactional Outbox → NATS JetStream
 - Accounting representation of accounts (asset, liability, revenue, expense, equity)
+- Required balanced `movements` grouping transaction entries with an immutable type and statement description
 
 ---
 
 ## Architecture
 
-This service follows **Hexagonal Architecture** with **tactical Domain-Driven Design**, organized around three bounded contexts internally: `transaction`, `account`, and `outbox`.
+This service follows **Hexagonal Architecture** with **tactical Domain-Driven Design**, organized into `transaction`, `account`, and `outbox` modules inside the **Ledger bounded context**.
 
 ### Dependency rule
 
@@ -30,181 +31,22 @@ The `domain` layer imports nothing external. The `infrastructure` layer implemen
 
 ### Project structure
 
-```
-## 📂 Estrutura do Projeto
+The service is organized by domain, application use cases, adapters and infrastructure. Key paths:
 
-isura-ledger-ms/
-├── .github/
-│   └── workflows/
-│       └── golang-build-test.yaml    # CI/CD pipeline de testes e build
-├── .air.toml                         # Configuração do hot reload (Air) para desenvolvimento local
-├── .gitignore                        # Arquivos e pastas ignorados pelo Git
-├── Dockerfile                        # Build multi-stage otimizado para produção
-├── Dockerfile.local                  # Build e container para desenvolvimento local com Air
-├── Makefile                          # Comandos automatizados para build, migrações e testes
-├── README.md                         # Documentação principal do projeto
-├── buf.gen.yaml                      # Configuração de geração de código Go do Buf v2
-├── buf.yaml                          # Configuração do módulo Protobuf do Buf v2
-├── cmd/
-│   └── server/
-│       └── main.go                  # Ponto de entrada (bootstrap da aplicação)
-├── config.example.json               # Exemplo de configuração de variáveis em JSON
-├── config.json                       # Configurações locais da aplicação
-├── db/
-│   ├── accounts.pg.hcl              # Definição Atlas HCL da tabela de contas
-│   ├── entries.pg.hcl               # Definição Atlas HCL da tabela de lançamentos
-│   ├── outbox.pg.hcl                # Definição Atlas HCL da tabela outbox
-│   ├── schema.pg.hcl                # Esquema público base do banco de dados
-│   └── transactions.pg.hcl          # Definição Atlas HCL da tabela de transações
-├── docker-compose.yml                # Orquestração de serviços (Postgres, Prometheus, Tempo, Grafana)
-├── docker/
-│   └── tempo/
-│       └── tempo.yaml               # Configuração do Grafana Tempo para rastreamento distribuído
-├── go.mod                            # Definição do módulo Go e dependências
-├── go.sum                            # Checksums criptográficos das dependências
-├── internal/
-│   ├── application/
-│   │   ├── command/
-│   │   │   ├── create_account.go    # Use Case: Criação e validação de conta contábil
-│   │   │   ├── create_transaction.go# Use Case: Criação de transações double-entry
-│   │   │   └── mask.go              # Helpers de mascaramento para logs seguros
-│   │   ├── dto/
-│   │   │   └── create_account.go    # Objetos de transferência de dados (Input/Output)
-│   │   ├── event/
-│   │   │   └── transaction_create.go# Contrato/Payload do evento gerado na Outbox
-│   │   ├── logger.go                # Interface/Contrato de logs da aplicação
-│   │   ├── metrics.go               # Interface/Contrato de métricas da aplicação
-│   │   ├── tracer.go                # Interface/Contrato de traces (OpenTelemetry)
-│   │   └── uow.go                   # Interface do padrão Unit of Work
-│   ├── domain/
-│   │   ├── account/
-│   │   │   ├── account.go           # Entidade Account, Builder e regras de saldo
-│   │   │   └── repository.go        # Interface do repositório de contas
-│   │   ├── fault/
-│   │   │   ├── errors.go            # Fábricas e mapeamentos de erros de infra/banco
-│   │   │   ├── fault.go             # Engine customizável de erros estruturados
-│   │   │   └── sentinel.go          # Erros sentinelas globais do negócio
-│   │   ├── money/
-│   │   │   └── money.go             # Value Object Money (armazenado em centavos)
-│   │   ├── outbox/
-│   │   │   ├── outbox.go            # Agregado Outbox e máquina de estados
-│   │   │   └── repository.go        # Interface do repositório outbox
-│   │   ├── tax/
-│   │   │   └── cnpj.go              # Value Object CNPJ com validação de dígitos
-│   │   ├── transaction/
-│   │   │   ├── entry.go             # Entidade Entry (Débito/Crédito)
-│   │   │   ├── repository.go        # Interface do repositório de transações
-│   │   │   ├── transaction.go       # Agregado Root Transaction + Máquina de Estados
-│   │   │   └── types.go             # IDs fortemente tipados (TransactionID, etc.)
-│   │   └── validator/
-│   │       └── validator.go         # Utilitários de validação e verificação de campos
-│   ├── infra/
-│   │   ├── configs/
-│   │   │   └── configs.go           # Carregamento de configurações via Viper
-│   │   ├── dependency/
-│   │   │   ├── base_deps.go         # Inicialização de dependências base de infra
-│   │   │   └── composer.go          # Wires e composição dos repositórios
-│   │   ├── factory/
-│   │   │   └── create_account_factory.go # Fábrica de instanciação do Use Case de contas
-│   │   ├── logger/
-│   │   │   └── logger.go            # Implementação do slog (JSON/Tint dual handler)
-│   │   ├── observability/
-│   │   │   ├── otel_tracer.go       # Implementação do Tracer OpenTelemetry
-│   │   │   └── prometheus.go        # Registro do subsistema de métricas Prometheus
-│   │   ├── postgres/
-│   │   │   ├── database/
-│   │   │   │   ├── helper.go        # Funções auxiliares de conversão de tipos pgx
-│   │   │   │   └── querier.go       # Interface unificada para DB Pool e Transações (Tx)
-│   │   │   ├── model/
-│   │   │   │   ├── account.go       # Model Postgres para Account
-│   │   │   │   ├── entry.go         # Model Postgres para Entry
-│   │   │   │   ├── outbox.go        # Model Postgres para Outbox
-│   │   │   │   └── transaction.go   # Model Postgres para Transaction
-│   │   │   ├── repository/
-│   │   │   │   ├── criteria/
-│   │   │   │   │   └── account.go   # Construtor dinâmico de critérios (Query & Args) para contas
-│   │   │   │   ├── observability/
-│   │   │   │   │   ├── account_observability.go     # Decorator para métricas/traces de contas
-│   │   │   │   │   ├── outbox_observability.go      # Decorator para métricas/traces de outbox
-│   │   │   │   │   └── transaction_observability.go # Decorator para métricas/traces de transações
-│   │   │   │   ├── account.go       # Repositório Postgres concreto para contas
-│   │   │   │   ├── outbox.go        # Repositório Postgres concreto para outbox
-│   │   │   │   ├── resolve_db.go    # Helper para extrair Transação ativa do Contexto
-│   │   │   │   └── transaction.go   # Repositório Postgres concreto para transações
-│   │   │   ├── uow/
-│   │   │   │   └── uow.go           # Implementação concreta do Unit of Work com pgx.Tx
-│   │   │   └── postgres.go          # Inicialização, pool e ping da conexão PostgreSQL
-│   │   └── server/
-│   │       ├── graceful_shutdown.go # Controle de encerramento limpo dos servidores
-│   │       ├── grpc_server.go       # Ciclo de vida, interceptors e registro do gRPC
-│   │       └── http_server.go       # Ciclo de vida e configuração do servidor HTTP (Chi)
-│   └── transport/
-│       ├── grpc/
-│       │   ├── handler/
-│       │   │   ├── create_account_handler.go     # Traduz requisições Protobuf ↔ Command de Conta
-│       │   │   └── create_transaction_handler.go # Traduz requisições Protobuf ↔ Command de Transação
-│       │   ├── interceptor/
-│       │   │   ├── logging.go       # Interceptor gRPC de logs estruturados
-│       │   │   ├── metrics.go       # Interceptor gRPC de coleta de métricas
-│       │   │   └── tracing.go       # Interceptor gRPC de rastreamento distribuído
-│       │   ├── pb/ledger/v1/        # Stubs `.go` gerados automaticamente pelo Protobuf/Buf
-│       │   │   ├── account.pb.go
-│       │   │   ├── ledger.pb.go
-│       │   │   ├── ledger_grpc.pb.go
-│       │   │   └── transaction.pb.go
-│       │   ├── translator/
-│       │   │   └── fault_translator.go # Traduz erros de domínio para gRPC Status Codes
-│       │   ├── ledger_module.go     # Módulo gRPC específico do Ledger
-│       │   ├── module.go            # Interface base para módulos gRPC
-│       │   ├── server.go            # Definição estrutural do LedgerServer gRPC
-│       │   └── server_registry.go   # Registrador dinâmico de módulos gRPC
-│       └── rest/
-│           ├── decoder/
-│           │   ├── request.go       # Decodificador de corpo HTTP com validação de erros JSON
-│           │   ├── response_error.go   # Serializador padronizado de erros REST
-│           │   └── response_sucess.go  # Serializador padronizado de sucesso REST
-│           ├── handler/
-│           │   ├── create_account_handler.go # Handler HTTP para criação de contas
-│           │   └── healthcheck_handler.go    # Handler de Health Check com métricas do runtime Go
-│           ├── middleware/
-│           │   ├── logging.go       # Middleware HTTP de logs de requisição
-│           │   ├── metric.go        # Middleware HTTP de métricas Prometheus
-│           │   └── tracing.go       # Middleware HTTP para OpenTelemetry Spans
-│           ├── module/
-│           │   ├── account_module.go     # Agrupador de rotas REST de contas
-│           │   ├── healthcheck_module.go # Agrupador de rotas REST de healthcheck
-│           │   └── metrics_module.go     # Exposição do endpoint `/metrics` do Prometheus
-│           ├── register.go          # Registrador central de rotas no roteador Chi
-│           ├── setup.go             # Inicialização e injeção do roteador Chi REST
-│           ├── translator/
-│           │   └── fault_translator.go # Mapeia códigos de domínio para HTTP Status Codes
-│           └── types/
-│               └── route.go         # Tipagens e estruturas auxiliares para roteamento HTTP
-├── payload.json                      # Payload de exemplo para testes de requisição
-├── prometheus.yml                    # Configuração de scraping do Prometheus
-├── proto/
-│   └── ledger/
-│       └── v1/
-│           ├── account.proto        # Contrato Protobuf de contas e enums de tipo/moeda
-│           ├── ledger.proto         # Contrato Protobuf dos serviços globais do Ledger
-│           └── transaction.proto    # Contrato Protobuf de transações e lançamentos
-├── targets.txt                       # Arquivo de alvos para testes de carga com Vegeta
-└── tests/
-    └── unit/
-        └── domain/
-            ├── account/
-            │   ├── account_test.go   # Testes unitários da entidade Account
-            │   └── suite_test.go     # Suíte Ginkgo para Account
-            ├── money/
-            │   ├── money_test.go     # Testes unitários do Value Object Money
-            │   └── suite_test.go     # Suíte Ginkgo para Money
-            ├── outbox/
-            │   ├── outbox_test.go    # Testes unitários do agregado Outbox
-            │   └── suite_test.go     # Suíte Ginkgo para Outbox
-            └── transaction/
-                ├── suite_test.go     # Suíte Ginkgo para Transaction
-                ├── transaction_test.go # Testes unitários do agregado Transaction
-                └── types_test.go     # Testes da máquina de estados de transações
+```text
+cmd/server/                         # Service bootstrap
+internal/domain/transaction/        # Transaction, Entry, Movement, domain events
+internal/domain/account/            # Accounting accounts and balance policy
+internal/domain/outbox/             # Outbox domain model
+internal/application/command/       # CreateTransaction and other commands
+internal/application/dto/           # REST/application payload validation
+internal/infra/postgres/repository/ # PostgreSQL persistence, including movements
+internal/infra/postgres/uow/        # pgx Unit of Work
+internal/infra/nats/                # NATS JetStream outbox relay
+internal/transport/                 # HTTP and gRPC adapters
+db/                                 # Atlas HCL schemas, including movements.pg.hcl
+proto/                              # Protobuf contracts
+tests/                              # Unit, integration and chaos tests
 ```
 
 ---
@@ -234,7 +76,7 @@ COMPLETED → any      ✗
 FAILED → any         ✗
 ```
 
-A `Transaction` always contains exactly two `Entry` records — one `DEBIT` and one `CREDIT` with equal amounts. These invariants are enforced by `AddEntry()` before any persistence occurs.
+A `Transaction` contains **at least two** `Entry` records. It may contain multiple balanced movements (for example TED + fee). Debit and credit totals must balance, the transaction currency is consistent, and each entry belongs to exactly one individually balanced `Movement`. The aggregate validates these invariants before persistence.
 
 ### Entry — Entity
 
@@ -252,6 +94,24 @@ Entry {
   CreatedAt      time.Time
 }
 ```
+
+### Movement — Entity inside Transaction
+
+A movement represents one business purpose within the accounting transaction, such as a TED transfer or its fee. Unlike the earlier JSONB proposal, **the implementation on `main` uses a relational `movements` table with a movement ID**.
+
+```text
+Transaction
+  Movement (TED_TRANSFER, "TED enviada")
+    Entry: DEBIT  100000 cents
+    Entry: CREDIT 100000 cents
+  Movement (TED_FEE, "Tarifa TED")
+    Entry: DEBIT    1000 cents
+    Entry: CREDIT   1000 cents
+```
+
+A movement has `id`, `transaction_id`, `type`, and required nonblank `description`. Each `Entry` has a `movement_id`; the composite foreign key `(movement_id, transaction_id)` enforces that referenced movements belong to the same transaction. The domain also checks that movement entries balance independently, no entry is assigned twice, and every entry belongs to one movement. Amounts remain authoritative in `entries`, not in a duplicate JSON document.
+
+The API accepts movements with zero-based `entry_positions`, which the Writer resolves to generated entry IDs. The grouping and descriptions participate in the idempotency fingerprint.
 
 ### Account — Entity
 
@@ -286,14 +146,15 @@ SUCCESS → any       ✗
 
 ### Transactional Outbox
 
-The writer persists each transaction, its entries, and its outbox event atomically. The outbox relay then publishes committed events to NATS JetStream:
+The writer persists each transaction, its movements, entries, and its outbox event atomically. The outbox relay then publishes committed events to NATS JetStream:
 
 ```text
 CreateTransaction
        │
        └── PostgreSQL transaction
              ├── transactions
-             ├── entries (financial postings sequenced per account)
+             ├── movements (purpose + description)
+             ├── entries (financial postings, each linked to a movement)
              └── outbox_events
                      │
                      └── OutboxRelay → NATS JetStream
@@ -304,13 +165,13 @@ All writes happen in one PostgreSQL transaction:
 ```
 BEGIN
   INSERT INTO transactions ...
-  INSERT INTO entries ...      (debit)
-  INSERT INTO entries ...      (credit)
+  INSERT INTO movements ...
+  INSERT INTO entries ...      (all debit/credit postings)
   INSERT INTO outbox_events ... (event payload)
 COMMIT
 ```
 
-`accounts` stores account identity, currency, status, and balance policy. For ledger transactions, `entries` is the append-only record of financial postings, ordered per account by `sequence_number`; each entry stores the resulting `running_balance`, and the latest entry provides the balance used by the transaction flow. The normal transaction flow inserts entries and does not update or delete previously committed entries. The existing `balances` table and its account-creation event handler are a separate legacy/bootstrap record and are not the source used to calculate a transaction's running balance. This initiative does not change or remove that table. If a transaction commit fails, its transaction, entries, and outbox event are all rolled back. After commit, the relay publishes the event to JetStream.
+`accounts` stores account identity, currency, status, and balance policy. For ledger transactions, `entries` is the append-only record of financial postings, ordered per account by `sequence_number`; each entry stores the resulting `running_balance`, and the latest entry provides the balance used by the transaction flow. The normal transaction flow inserts entries and does not update or delete previously committed entries. The existing `balances` table and its account-creation event handler are a separate legacy/bootstrap record and are not the source used to calculate a transaction's running balance. This initiative does not change or remove that table. If a transaction commit fails, its transaction, movements, entries, and outbox event are all rolled back. After commit, the relay publishes the event to JetStream.
 
 `transactions` stores the operation envelope, status, and idempotency key/fingerprint. `outbox_events` stores integration events in the same PostgreSQL transaction as their ledger operation; the relay publishes committed events to JetStream and can retry failed deliveries. Historical balance backfill is a separate operational maintenance flow that can recalculate `entries.running_balance`; it is outside the normal append-only transaction flow and is not changed here.
 
@@ -324,7 +185,7 @@ The `UnitOfWork` interface wraps the PostgreSQL transaction lifecycle. All repos
 
 ```go
 return c.uow.WithRetryableTransaction(ctx, func(ctxTx context.Context) error {
-    // transaction, entries, and outbox use one pgx.Tx
+    // transaction, movements, entries, and outbox use one pgx.Tx
     if err := c.transactionRepository.Save(ctxTx, tx); err != nil {
         return err
     }
@@ -332,9 +193,9 @@ return c.uow.WithRetryableTransaction(ctx, func(ctxTx context.Context) error {
 })
 ```
 
-### CQRS
+### CQRS and downstream Reader
 
-Write operations live in `application/command/`, read operations in `application/query/`. Commands return only `error`. Queries return `(Result, error)`.
+The Go Writer owns the authoritative accounting data in PostgreSQL. A separate Java Ledger Reader is planned with its own PostgreSQL read model, built from events; it does **not** query the Writer database directly. Within the Ledger bounded context, the existing event transport is NATS JetStream. Kafka is considered for cross-bounded-context integrations, not required for the internal Writer → Reader flow. The Reader and its projection/rebuild workflow are not implemented in this repository.
 
 ---
 
@@ -376,8 +237,8 @@ github.com/prometheus/client_golang # Prometheus metrics
 
 ```bash
 # clone
-git clone https://github.com/andreis3/isura-ledger-ms
-cd isura-ledger-ms
+git clone https://github.com/Andreis3/isura-ledger-writer-ms.git
+cd isura-ledger-writer-ms
 
 # create local config and start dependencies
 cp config.example.json config.json
@@ -396,6 +257,8 @@ make run-app
 make migrate         # apply the Atlas schema
 make unit            # run unit tests
 make integration-tests # run integration tests
+make chaos-tests      # run PostgreSQL/NATS failure recovery scenarios
+make unit-cover-business # measure application/domain test coverage
 make proto-lint      # lint protobuf contracts
 make proto-gen       # regenerate protobuf files
 make build           # build the application image
@@ -438,7 +301,8 @@ NATS_RELAY_RETRY_AFTER=5s
 | Table | Description |
 |---|---|
 | `transactions` | Aggregate root — one record per transaction |
-| `entries` | Double-entry records — always two per transaction |
+| `entries` | Immutable debit/credit postings, with account sequencing, running balance, and `movement_id` |
+| `movements` | Business movement groups with ID, type, required description, and transaction FK |
 | `accounts` | Accounting representation of accounts |
 | `balances` | Existing legacy/bootstrap balance record created by the account balance event flow; not used to calculate transaction running balances |
 | `outbox_events` | Transactional outbox — pending NATS JetStream events |
@@ -452,9 +316,44 @@ UNIQUE (idempotency_key) ON transactions
 -- double-entry integrity
 FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON entries
 
+-- movement belongs to the same transaction as each entry
+FOREIGN KEY (movement_id, transaction_id) REFERENCES movements(id, transaction_id) ON entries
+
 -- outbox ordering
 INDEX (status, created_at) ON outbox_events
 ```
+
+---
+
+## Movements API example (TED + fee)
+
+For multi-entry transactions, send the total debit amount in cents, the ordered `entries` array, and one or more `movements` with **zero-based** `entry_positions`. Movement `type` and `description` are mandatory. The account IDs below are illustrative; real requests require valid account UUIDs.
+
+```json
+{
+  "idempotency_key": "ted-0001",
+  "operation": "TED_OUT",
+  "amount": 101000,
+  "entries": [
+    {"account_id": "customer-uuid", "direction": "DEBIT", "amount": 100000, "currency": "BRL"},
+    {"account_id": "settlement-uuid", "direction": "CREDIT", "amount": 100000, "currency": "BRL"},
+    {"account_id": "customer-uuid", "direction": "DEBIT", "amount": 1000, "currency": "BRL"},
+    {"account_id": "fee-revenue-uuid", "direction": "CREDIT", "amount": 1000, "currency": "BRL"}
+  ],
+  "movements": [
+    {"type": "TED_TRANSFER", "description": "TED enviada", "entry_positions": [0, 1]},
+    {"type": "TED_FEE", "description": "Tarifa TED", "entry_positions": [2, 3]}
+  ]
+}
+```
+
+A simple transfer using `debit_account_id` and `credit_account_id` also requires movements; its normalized entries are ordered **CREDIT (position 0), DEBIT (position 1)**.
+
+### TransactionCreated event
+
+After commit, the Outbox relay publishes the `TransactionCreated` JSON payload to NATS JetStream. The current producer sets `event_version: 1`. Its `entries` include `entry_id`, `position`, `account_id`, `sequence_number`, `direction`, `amount`, `currency`, `running_balance`, and `movement_id`. Each `movements` item contains `movement_id`, `type`, `description`, and `entry_ids`.
+
+The event provides the association needed for the future Reader to produce statements. Downstream consumers must tolerate duplicate delivery and handle account ordering/gaps; event persistence in the Outbox does not by itself guarantee indefinite replay retention.
 
 ---
 
@@ -478,10 +377,10 @@ service LedgerService {
 go test ./internal/domain/...
 
 # integration tests (requires Docker)
-go test ./internal/infrastructure/... -tags=integration
+make integration-tests
 
 # all tests with race detector
-go test -race ./...
+make chaos-tests
 ```
 
 ---
