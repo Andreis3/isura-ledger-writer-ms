@@ -16,6 +16,11 @@ table "entries" {
     null = false
   }
 
+  column "movement_id" {
+    type = text
+    null = true
+  }
+
   column "sequence_number" {
     type = bigint
     null = false
@@ -68,6 +73,11 @@ table "entries" {
   foreign_key "fk_entries_transaction_id" {
     columns     = [column.transaction_id]
     ref_columns = [table.transactions.column.id]
+  }
+
+  foreign_key "fk_entries_movement_transaction" {
+    columns     = [column.movement_id, column.transaction_id]
+    ref_columns = [table.movements.column.id, table.movements.column.transaction_id]
   }
 
   index "idx_entries_transaction_id" {

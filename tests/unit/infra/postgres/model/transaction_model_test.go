@@ -59,9 +59,45 @@ var _ = Describe("INTERNAL :: INFRA :: POSTGRES :: MODEL :: TRANSACTION", func()
 				Expect(decoded.Amount.Amount()).To(Equal(int64(250)))
 				Expect(decoded.Amount.Currency()).To(Equal(money.BRL))
 			})
+
+			It("should preserve the absence of movements for a historical transaction", func() {
+				// Arrange.
+				persisted := model.Transaction{
+					ID:                 pgtype.Text{String: "019ff448-c43d-70d3-83c7-dfa067446b01", Valid: true},
+					IdempotencyKey:     pgtype.Text{String: "historical", Valid: true},
+					RequestFingerprint: pgtype.Text{String: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Valid: true},
+					Status:             pgtype.Text{String: string(transaction.Completed), Valid: true},
+					Operation:          pgtype.Text{String: string(transaction.OperationTransfer), Valid: true},
+					Amount:             pgtype.Int8{Int64: 250, Valid: true},
+					Currency:           pgtype.Text{String: string(money.BRL), Valid: true},
+				}
+				entries := historicalEntries()
+
+				// Act.
+				decoded, err := model.ToTransactionDomain(persisted, entries)
+
+				// Assert.
+				Expect(err).NotTo(HaveOccurred())
+				Expect(decoded.Movements).To(BeNil())
+			})
 		})
 	})
 })
+
+func historicalEntries() []*transaction.Entry {
+	amount, err := money.NewMoney(250, money.BRL)
+	Expect(err).NotTo(HaveOccurred())
+	entries := make([]*transaction.Entry, 0, 2)
+	for index, direction := range []transaction.Direction{transaction.Debit, transaction.Credit} {
+		entry, buildErr := transaction.NewEntryBuilder().WithID().WithTransactionID("019ff448-c43d-70d3-83c7-dfa067446b01").
+			WithAccountExternalID("d589965c-1622-4329-98f9-f13354a2e4dc").WithDirection(direction).WithAmount(amount).Build()
+		Expect(buildErr).NotTo(HaveOccurred())
+		entry.AssignAccountID("d589965c-1622-4329-98f9-f13354a2e4dc")
+		entry.SetTransactionPosition(int64(index))
+		entries = append(entries, entry)
+	}
+	return entries
+}
 
 var _ = Describe("INTERNAL :: INFRA :: POSTGRES :: MODEL :: ENTRY", func() {
 	Describe("#ToEntryModel", func() {

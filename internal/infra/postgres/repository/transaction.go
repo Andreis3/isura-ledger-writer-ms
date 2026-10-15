@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/andreis3/isura-ledger-ms/internal/domain/transaction"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/postgres/database"
@@ -63,18 +64,32 @@ func (r *TransactionRepository) Save(ctx context.Context, data *transaction.Tran
 		transactionModel.UpdatedAt,
 	)
 
+	entryMovementIDs := make(map[string]string, len(data.Entries))
+	for _, movement := range data.Movements {
+		movementModel, err := model.ToMovementModel(movement, data.ID.String())
+		if err != nil {
+			return err
+		}
+		batch.Queue(`INSERT INTO movements (id, transaction_id, type, description) VALUES ($1, $2, $3, $4)`,
+			movementModel.ID, movementModel.TransactionID, movementModel.Type, movementModel.Description)
+		for _, entry := range movement.Entries {
+			entryMovementIDs[entry.ID.String()] = movement.ID.String()
+		}
+	}
+
 	for _, entry := range data.Entries {
-		entryModel, err := model.ToEntryModel(entry)
+		entryModel, err := model.ToEntryModel(entry, entryMovementIDs[entry.ID.String()])
 		if err != nil {
 			return err
 		}
 		batch.Queue(`
 			INSERT INTO entries
-			(id, account_id, transaction_id, sequence_number, transaction_position, direction, amount, running_balance, currency, metadata, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+			(id, account_id, transaction_id, movement_id, sequence_number, transaction_position, direction, amount, running_balance, currency, metadata, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
 			entryModel.ID,
 			entryModel.AccountID,
 			entryModel.TransactionID,
+			entryModel.MovementID,
 			entryModel.SequenceNumber,
 			entryModel.TransactionPosition,
 			entryModel.Direction,
@@ -91,6 +106,11 @@ func (r *TransactionRepository) Save(ctx context.Context, data *transaction.Tran
 	defer results.Close()
 	if _, err := results.Exec(); err != nil {
 		return err
+	}
+	for range data.Movements {
+		if _, err := results.Exec(); err != nil {
+			return err
+		}
 	}
 	for range data.Entries {
 		if _, err := results.Exec(); err != nil {
@@ -132,7 +152,74 @@ func (r *TransactionRepository) Find(ctx context.Context, params transaction.Tra
 	if err != nil {
 		return nil, err
 	}
-	return model.ToTransactionDomain(transactionModel, entries)
+	movements, err := r.findMovements(ctx, transactionModel.ID.String, entries, withEntries)
+	if err != nil {
+		return nil, err
+	}
+	return model.ToTransactionDomain(transactionModel, entries, movements)
+}
+
+func (r *TransactionRepository) findMovements(ctx context.Context, transactionID string, entries []*transaction.Entry, withEntries bool) ([]*transaction.Movement, error) {
+	if !withEntries {
+		return nil, nil
+	}
+	db := resolveDB(ctx, r.db)
+	rows, err := db.Query(ctx, `
+		SELECT m.id, m.transaction_id, m.type, m.description, e.id
+		FROM movements m
+		LEFT JOIN entries e ON e.movement_id = m.id AND e.transaction_id = m.transaction_id
+		WHERE m.transaction_id = $1
+		ORDER BY m.id, e.transaction_position`, transactionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	entryByID := make(map[string]*transaction.Entry, len(entries))
+	for _, entry := range entries {
+		entryByID[entry.ID.String()] = entry
+	}
+	movements := make([]*transaction.Movement, 0)
+	movementEntries := make([]*transaction.Entry, 0)
+	var current model.Movement
+	finishMovement := func() error {
+		if !current.ID.Valid {
+			return nil
+		}
+		movement, err := model.ToMovementDomain(current, movementEntries)
+		if err != nil {
+			return err
+		}
+		movements = append(movements, movement)
+		movementEntries = make([]*transaction.Entry, 0)
+		return nil
+	}
+	for rows.Next() {
+		var movementModel model.Movement
+		var entryID pgtype.Text
+		if err := rows.Scan(&movementModel.ID, &movementModel.TransactionID, &movementModel.Type, &movementModel.Description, &entryID); err != nil {
+			return nil, err
+		}
+		if current.ID.Valid && current.ID.String != movementModel.ID.String {
+			if err := finishMovement(); err != nil {
+				return nil, err
+			}
+		}
+		current = movementModel
+		if entryID.Valid {
+			entry, ok := entryByID[entryID.String]
+			if !ok {
+				return nil, fmt.Errorf("movement entry %s not found in transaction %s", entryID.String, transactionID)
+			}
+			movementEntries = append(movementEntries, entry)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := finishMovement(); err != nil {
+		return nil, err
+	}
+	return movements, nil
 }
 
 func (r *TransactionRepository) findEntries(ctx context.Context, transactionID string, withEntries bool) ([]*transaction.Entry, error) {

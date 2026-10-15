@@ -67,6 +67,51 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: TRANSACTION REPOSITORY", f
 			Expect(byID.Entries[0].TransactionPosition).To(Equal(int64(0)))
 			Expect(byID.Entries[1].TransactionPosition).To(Equal(int64(1)))
 		})
+		It("should persist movement references and keep legacy transactions readable", func() {
+			// Arrange.
+			accountA, accountB := insertCommittedAccounts(ctx, pool)
+			entityTransaction := newTransaction(accountA, accountB)
+			movement, err := transaction.NewMovementBuilder().WithID().WithType("TRANSFER").WithDescription("principal transfer").
+				WithEntries(entityTransaction.Entries).Build()
+			Expect(err).NotTo(HaveOccurred())
+			entityTransaction, err = transaction.NewTransactionBuilder().WithID(entityTransaction.ID.String()).
+				WithIdempotencyKey(entityTransaction.IdempotencyKey).WithFingerprint(entityTransaction.Fingerprint).
+				WithStatus(entityTransaction.Status).WithAmount(entityTransaction.Amount).WithOperation(entityTransaction.Operation).
+				WithEntries(entityTransaction.Entries).WithMovements([]*transaction.Movement{movement}).Build()
+			Expect(err).NotTo(HaveOccurred())
+			defer cleanupCommittedAccounts(ctx, pool, []string{accountA, accountB}, []string{entityTransaction.ID.String()})
+			repo := repository.NewTransactionRepository(pool)
+
+			// Act.
+			err = uow.NewUnitOfWork(pool).WithTransaction(ctx, func(txContext context.Context) error {
+				if err := prepareTransactionLedger(ctx, txContext, entityTransaction, pool); err != nil {
+					return err
+				}
+				return repo.Save(txContext, entityTransaction)
+			})
+			Expect(err).NotTo(HaveOccurred())
+			loaded, err := repo.Find(ctx, transaction.TransactionCriteria{ID: new(entityTransaction.ID.String()), WithEntries: true})
+
+			// Assert.
+			Expect(err).NotTo(HaveOccurred())
+			Expect(loaded.Movements).To(HaveLen(1))
+			Expect(loaded.Movements[0].ID).To(Equal(movement.ID))
+			Expect(loaded.Movements[0].Entries).To(HaveLen(2))
+			Expect(loaded.Movements[0].Entries[0]).To(BeIdenticalTo(loaded.Entries[0]))
+			Expect(loaded.Movements[0].Entries[1]).To(BeIdenticalTo(loaded.Entries[1]))
+
+			legacy := newTransaction(accountA, accountB)
+			defer cleanupCommittedAccounts(ctx, pool, []string{accountA, accountB}, []string{legacy.ID.String()})
+			Expect(uow.NewUnitOfWork(pool).WithTransaction(ctx, func(txContext context.Context) error {
+				if err := prepareTransactionLedger(ctx, txContext, legacy, pool); err != nil {
+					return err
+				}
+				return repo.Save(txContext, legacy)
+			})).To(Succeed())
+			legacyLoaded, err := repo.Find(ctx, transaction.TransactionCriteria{ID: new(legacy.ID.String()), WithEntries: true})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(legacyLoaded.Movements).To(BeNil())
+		})
 		It("should preserve input positions and apply repeated account entries progressively", func() {
 			accountA, accountB := insertCommittedAccounts(ctx, pool)
 			entityTransaction := newMultiEntryTransaction(accountA, accountB)

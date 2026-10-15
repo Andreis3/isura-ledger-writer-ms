@@ -14,6 +14,7 @@ type Entry struct {
 	ID                  pgtype.Text
 	AccountID           pgtype.Text
 	TransactionID       pgtype.Text
+	MovementID          pgtype.Text
 	SequenceNumber      pgtype.Int8
 	TransactionPosition pgtype.Int8
 	RunningBalance      pgtype.Int8
@@ -42,12 +43,12 @@ func entryMetadataMap(raw []byte) (map[string]string, error) {
 	return metadata, nil
 }
 
-func ToEntryModel(domain *transaction.Entry) (Entry, error) {
+func ToEntryModel(domain *transaction.Entry, movementID ...string) (Entry, error) {
 	metadata, err := entryMetadataBytes(domain.Metadata)
 	if err != nil {
 		return Entry{}, fmt.Errorf("encode entry metadata: %w", err)
 	}
-	return Entry{
+	entry := Entry{
 		ID:                  pgtype.Text{String: domain.ID.String(), Valid: true},
 		AccountID:           pgtype.Text{String: domain.AccountID, Valid: true},
 		TransactionID:       pgtype.Text{String: domain.TransactionID, Valid: true},
@@ -59,7 +60,11 @@ func ToEntryModel(domain *transaction.Entry) (Entry, error) {
 		Currency:            pgtype.Text{String: string(domain.Amount.Currency()), Valid: true},
 		Metadata:            metadata,
 		CreatedAt:           pgtype.Timestamptz{Time: domain.CreatedAt, Valid: true},
-	}, nil
+	}
+	if len(movementID) > 0 && movementID[0] != "" {
+		entry.MovementID = pgtype.Text{String: movementID[0], Valid: true}
+	}
+	return entry, nil
 }
 
 func ToEntryDomain(model Entry) (*transaction.Entry, error) {
