@@ -146,7 +146,7 @@ SUCCESS → any       ✗
 
 ### Transactional Outbox
 
-The writer persists each transaction, its movements, entries, and its outbox event atomically. The outbox relay then publishes committed events to NATS JetStream:
+The Writer persists each transaction, its movements, entries, and its outbox event atomically. The outbox relay then publishes committed events to NATS JetStream:
 
 ```text
 CreateTransaction
@@ -179,7 +179,7 @@ COMMIT
 
 The `transactions.idempotency_key` has a **global UNIQUE index** in the Writer database, not a per-account or per-movement scope. Callers must therefore supply a key that is unique across the entire Writer namespace.
 
-The request fingerprint includes the normalized posting intent, movement descriptions, movement types and entry positions. The same key with the **same** fingerprint returns the original transaction ID and `idempotent_replay: true` (no new entries, movements, or outbox event). The same key with a **different** fingerprint is an idempotency conflict. Concurrent unique-key races are resolved by looking up the committed transaction; an ambiguous commit is investigated by idempotency key instead of blindly submitting a second write.
+The request fingerprint is a **SHA-256 digest of the canonicalized business request**, including normalized posting intent, movement descriptions, movement types and entry positions. A fingerprint is a digest, not the original business payload; accidental cryptographic collisions are theoretically possible but considered computationally infeasible with SHA-256. A routine idempotency conflict (same key, different canonical payload) is **not** a hash collision. The same key with the **same** fingerprint returns the original transaction ID and `idempotent_replay: true` (no new entries, movements, or outbox event). The same key with a **different** fingerprint is an idempotency conflict. Concurrent unique-key races are resolved by looking up the committed transaction; an ambiguous commit is investigated by idempotency key instead of blindly submitting a second write.
 
 > Trade-off: global uniqueness simplifies enforcement but requires cross-product key coordination or namespace-prefixed keys. A per-tenant/account key scope would require schema and contract changes; it is not the current implementation.
 
@@ -215,7 +215,9 @@ The delivery contract is **at least once**, not end-to-end exactly once. A relay
 
 The Outbox relay **does implement a dead-letter publish attempt**. If a publish failure reaches `NATS_RELAY_MAX_ATTEMPTS`, it tries publishing the original payload to the configured `DLQSubject`; when that is empty, the subject falls back to the event type plus the defined DLQ suffix. The dead-letter message uses `Nats-Msg-Id: <outbox-id>.dlq` for deduplication.
 
-The original PostgreSQL Outbox record remains in `FAILED` state; `ClaimPending` selects only records with `attempts < maxAttempts`, so exhaustion stops normal automatic retries. **DLQ delivery is not guaranteed by this code path**: the broker or configured stream may be unavailable, and a DLQ publish failure is logged. This relay does not itself demonstrate a DLQ consumer, automatic redrive or guaranteed DLQ stream provisioning. Operators should inspect the failed Outbox records and subject/stream configuration before any controlled redrive.
+The original PostgreSQL Outbox record remains in `FAILED` state; `ClaimPending` selects only records with `attempts < maxAttempts`, so exhaustion stops normal automatic retries.
+
+**Independent retry budgets:** the PostgreSQL Unit of Work defaults to **5 attempts** for write-path concurrency conflicts; `NATS_RELAY_MAX_ATTEMPTS=3` is the example/default publishing budget for the **post-commit relay**. Exhausting either budget has different consequences: an unsuccessful financial write is rolled back, whereas an exhausted relay leaves a previously committed financial write and a `FAILED` Outbox record. **DLQ delivery is not guaranteed by this code path**: the broker or configured stream may be unavailable, and a DLQ publish failure is logged. This relay does not itself demonstrate a DLQ consumer, automatic redrive or guaranteed DLQ stream provisioning. Operators should inspect the failed Outbox records and subject/stream configuration before any controlled redrive.
 
 ### Observability signals
 
@@ -276,6 +278,17 @@ The current internal NATS payload is the JSON `TransactionCreated` event, produc
 - For incompatible changes, introduce a new explicit version and migration plan (support a transition period or separate event subject if necessary).
 - Publish a language-neutral canonical contract (JSON Schema/AsyncAPI, plus producer-consumer compatibility tests) before connecting the Java Reader. The Go struct is currently the implementation source; a shared schema registry or formal language-neutral contract is **not yet established**.
 - The Reader must persist processed `event_id` values, enforce per-account entry ordering, and acknowledge messages only after its own projection transaction commits.
+- **Proposed unsupported-version behavior:** if the Reader receives an event with a **newer unsupported `event_version`**, it must not silently discard or acknowledge it as successfully projected. Route the event to an explicitly managed quarantine/error flow (or pause the affected consumer), raise an alert, and resume/reprocess after consumer compatibility is restored. Avoid infinite redelivery loops. The exact NATS consumer pause/quarantine/redrive mechanism remains to be designed and is **not implemented**.
+
+**Examples of compatible vs. breaking changes:**
+
+| Change | Evolution strategy |
+|---|---|
+| Add optional `channel` (`API` or `BATCH`) without altering existing fields | Compatible additive change; may remain in v1 if consumers tolerate unknown fields |
+| Change `amount` from integer minor units to a decimal string | Breaking semantic/type change; define v2, dual-read or migration period, and contract tests |
+| Remove `sequence_number` from an entry | Breaking change affecting Reader ordering; requires v2 and a replacement sequencing contract |
+
+A new version alone does not ensure compatibility: producers and consumers need an explicit supported-version matrix and transition plan.
 
 This policy is **documentation of the intended integration contract**, not an assertion that schema registry, contract validation, or the Reader already exist.
 
@@ -328,7 +341,7 @@ sequenceDiagram
 | Concern | Current evidence / decision still needed |
 |---|---|
 | Hot-account throughput | Serializable retries and unique account sequences are implemented; benchmark target TPS and contention limits are not specified here. |
-| End-to-end lag | Outbox publishing and retries exist; define alert thresholds for pending age, failures and Reader projection lag. |
+| End-to-end lag | Outbox publishing and retries exist. Failures can be monitored through `ledger_outbox_total` filtered by `status`; **Outbox pending age and Reader projection lag require new instrumentation** before reliable lag-alert thresholds can be defined. |
 | Disaster recovery | Define backup verification, WAL archiving/PITR, RPO, RTO and recovery exercises. |
 | Financial retention | Define immutable retention/archiving and access policy for entries and descriptions. |
 | Period close | Define closing windows, reconciliation evidence, corrections and post-close posting policy. |
@@ -567,7 +580,8 @@ make chaos-tests
 | Sequence number | Per-account posting order, computed from the last persisted ledger state |
 | Reconciliation | Read-only replay/audit comparing computed and recorded running balances |
 | Period close | Accounting control that restricts/certifies postings within a period; **not implemented here** |
-| Idempotency fingerprint | Hash of canonical business request content used to distinguish safe replay from key reuse with different intent |
+| Idempotency fingerprint | SHA-256 digest of the canonicalized business request, used to distinguish safe replay from reuse of an idempotency key with different intent; a key conflict is not a hash collision |
+| Hot account | An account (such as a settlement account) receiving many concurrent postings, increasing per-account sequence contention |
 | Transactional Outbox | Database record of publication intent committed atomically with ledger data |
 | DLQ (dead-letter queue) | A configured JetStream destination used for attempted publication of exhausted Outbox events; not a guarantee of automatic recovery |
 
