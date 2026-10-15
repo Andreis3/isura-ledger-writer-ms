@@ -23,10 +23,12 @@ import (
 	"github.com/andreis3/isura-ledger-ms/internal/infra/nats"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/observability"
 	postgresadapter "github.com/andreis3/isura-ledger-ms/internal/infra/postgres"
+	"github.com/andreis3/isura-ledger-ms/internal/infra/postgres/repository"
 	"github.com/andreis3/isura-ledger-ms/internal/transport/rest"
 	adaptermocks "github.com/andreis3/isura-ledger-ms/tests/mocks/infra/adapter"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/nats-io/nats.go/jetstream"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/testcontainers/testcontainers-go"
@@ -42,6 +44,8 @@ var (
 	natsClient   *nats.ClientNats
 	prometheus   *observability.Prometheus
 	api          http.Handler
+	relayCancel  context.CancelFunc
+	relayDone    chan error
 )
 
 func TestAPIIntegration(t *testing.T) {
@@ -90,7 +94,7 @@ var _ = BeforeSuite(func() {
 			Name:    "LEDGER_API_TEST_EVENTS",
 			Subject: "ledger.writer.event",
 			Relay: configs.OutboxRelay{
-				Stream: "LEDGER_API_TEST_TRANSACTIONS", Subject: "ledger.api.integration.transaction.created",
+				Stream: "LEDGER_API_TEST_TRANSACTIONS", Subject: "ledger.transaction.created",
 				DLQSubject: "ledger.api.integration.transaction.created.dlq",
 			},
 		},
@@ -118,12 +122,22 @@ var _ = BeforeSuite(func() {
 		Cfg: config, Log: logger.NewLogger(), Prom: prometheus, Pg: postgresPool,
 		Tracer: adaptermocks.SilentTracerMock{}, Nats: natsClient,
 	}
+	relay := nats.NewOutboxRelay(repository.NewOutBoxRepository(postgresPool.Pool()), natsClient.JS,
+		adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{}, config.Nats.Relay)
+	relayCtx, cancelRelay := context.WithCancel(ctx)
+	relayCancel = cancelRelay
+	relayDone = make(chan error, 1)
+	go func() { relayDone <- relay.Run(relayCtx) }()
 	mux := chi.NewRouter()
 	rest.Setup(&rest.SetupDeps{Mux: mux, Deps: deps})
 	api = mux
 })
 
 var _ = AfterSuite(func() {
+	if relayCancel != nil {
+		relayCancel()
+		Expect(<-relayDone).NotTo(HaveOccurred())
+	}
 	if natsClient != nil {
 		natsClient.Close()
 	}
@@ -245,6 +259,69 @@ var _ = Describe("REST API", func() {
 			Expect(replayResult["transaction_id"]).To(Equal(firstResult["transaction_id"]))
 			Expect(replayResult["idempotent_replay"]).To(BeTrue())
 		})
+
+		It("should confirm a composed transaction and publish correlated movements and entries", func() {
+			// Arrange: observe only events published after this request.
+			consumer, err := natsClient.JS.CreateOrUpdateConsumer(ctx, "LEDGER_API_TEST_TRANSACTIONS", jetstream.ConsumerConfig{
+				FilterSubject: "ledger.transaction.created", AckPolicy: jetstream.AckExplicitPolicy,
+				DeliverPolicy: jetstream.DeliverNewPolicy,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			debitAccount := createAccountThroughAPI("LIABILITY")
+			creditAccount := createAccountThroughAPI("ASSET")
+			feeDebitAccount := createAccountThroughAPI("LIABILITY")
+			feeCreditAccount := createAccountThroughAPI("ASSET")
+			key := uuid.NewString()
+			requestBody := fmt.Sprintf(`{"idempotency_key":%q,"operation":"TRANSFER","amount":110,"entries":[{"account_id":%q,"direction":"DEBIT","amount":100,"currency":"BRL"},{"account_id":%q,"direction":"CREDIT","amount":100,"currency":"BRL"},{"account_id":%q,"direction":"DEBIT","amount":10,"currency":"BRL"},{"account_id":%q,"direction":"CREDIT","amount":10,"currency":"BRL"}],"movements":[{"type":"TRANSFER","description":"principal transfer","entry_positions":[0,1]},{"type":"FEE","description":"transfer fee","entry_positions":[2,3]}]}`,
+				key, debitAccount, creditAccount, feeDebitAccount, feeCreditAccount)
+
+			// Act: create through REST and receive the event through the outbox relay.
+			response := callAPI(http.MethodPost, "/transactions", requestBody, "")
+			Expect(response.Code).To(Equal(http.StatusCreated), response.Body.String())
+			var result struct {
+				TransactionID string `json:"transaction_id"`
+			}
+			Expect(json.Unmarshal(response.Body.Bytes(), &result)).To(Succeed())
+			message, err := awaitTransactionEvent(consumer, result.TransactionID)
+			Expect(err).NotTo(HaveOccurred())
+			defer func() { Expect(message.Ack()).To(Succeed()) }()
+
+			// Assert: persisted rows and the published snapshot agree on group membership.
+			var payload struct {
+				EventVersion  int    `json:"event_version"`
+				TransactionID string `json:"transaction_id"`
+				Entries       []struct {
+					EntryID    string `json:"entry_id"`
+					Position   int    `json:"position"`
+					MovementID string `json:"movement_id"`
+				} `json:"entries"`
+				Movements []struct {
+					MovementID string   `json:"movement_id"`
+					Type       string   `json:"type"`
+					EntryIDs   []string `json:"entry_ids"`
+				} `json:"movements"`
+			}
+			Expect(json.Unmarshal(message.Data(), &payload)).To(Succeed())
+			Expect(payload.EventVersion).To(Equal(1))
+			Expect(payload.TransactionID).To(Equal(result.TransactionID))
+			Expect(payload.Entries).To(HaveLen(4))
+			Expect(payload.Movements).To(HaveLen(2))
+			var persistedEntries, persistedMovements int
+			Expect(postgresPool.Pool().QueryRow(ctx, "SELECT count(*) FROM entries WHERE transaction_id = $1", result.TransactionID).Scan(&persistedEntries)).To(Succeed())
+			Expect(postgresPool.Pool().QueryRow(ctx, "SELECT count(*) FROM movements WHERE transaction_id = $1", result.TransactionID).Scan(&persistedMovements)).To(Succeed())
+			Expect(persistedEntries).To(Equal(4))
+			Expect(persistedMovements).To(Equal(2))
+			for movementIndex, positions := range [][]int{{0, 1}, {2, 3}} {
+				movement := payload.Movements[movementIndex]
+				Expect(movement.Type).To(Equal([]string{"TRANSFER", "FEE"}[movementIndex]))
+				Expect(movement.EntryIDs).To(HaveLen(2))
+				for _, position := range positions {
+					Expect(payload.Entries[position].Position).To(Equal(position))
+					Expect(payload.Entries[position].MovementID).To(Equal(movement.MovementID))
+					Expect(movement.EntryIDs).To(ContainElement(payload.Entries[position].EntryID))
+				}
+			}
+		})
 	})
 
 	Context("error cases", func() {
@@ -259,6 +336,33 @@ var _ = Describe("REST API", func() {
 			Expect(response.Code).To(BeNumerically(">=", http.StatusBadRequest))
 			Expect(response.Code).To(BeNumerically("<", http.StatusInternalServerError))
 			Expect(response.Header().Get("Content-Type")).To(ContainSubstring("application/json"))
+		})
+
+		It("should reject an invalid movement without persisting transaction, entries, or outbox event", func() {
+			// Arrange: the movement is missing its required description.
+			debitAccount := createAccountThroughAPI("LIABILITY")
+			creditAccount := createAccountThroughAPI("ASSET")
+			key := uuid.NewString()
+			requestBody := fmt.Sprintf(`{"idempotency_key":%q,"operation":"TRANSFER","amount":100,"entries":[{"account_id":%q,"direction":"DEBIT","amount":100,"currency":"BRL"},{"account_id":%q,"direction":"CREDIT","amount":100,"currency":"BRL"}],"movements":[{"type":"TRANSFER","entry_positions":[0,1]}]}`,
+				key, debitAccount, creditAccount)
+
+			// Act: submit the invalid request.
+			response := callAPI(http.MethodPost, "/transactions", requestBody, "")
+
+			// Assert: API translation rejects it and no operation row can be found.
+			Expect(response.Code).To(BeNumerically(">=", http.StatusBadRequest))
+			Expect(response.Code).To(BeNumerically("<", http.StatusInternalServerError))
+			Expect(response.Header().Get("Content-Type")).To(ContainSubstring("application/json"))
+			var transactionCount int
+			Expect(postgresPool.Pool().QueryRow(ctx,
+				"SELECT count(*) FROM transactions WHERE idempotency_key = $1", key).Scan(&transactionCount)).To(Succeed())
+			Expect(transactionCount).To(BeZero())
+			var partialRecords int
+			Expect(postgresPool.Pool().QueryRow(ctx, `
+				SELECT (SELECT count(*) FROM entries e JOIN transactions t ON t.id = e.transaction_id WHERE t.idempotency_key = $1) +
+				       (SELECT count(*) FROM movements m JOIN transactions t ON t.id = m.transaction_id WHERE t.idempotency_key = $1) +
+				       (SELECT count(*) FROM outbox_events WHERE payload->>'idempotency_key' = $1)`, key).Scan(&partialRecords)).To(Succeed())
+			Expect(partialRecords).To(BeZero())
 		})
 	})
 })
@@ -292,6 +396,32 @@ func callAPI(method, path, body, idempotencyKey string) *httptest.ResponseRecord
 	response := httptest.NewRecorder()
 	api.ServeHTTP(response, request)
 	return response
+}
+
+func awaitTransactionEvent(consumer jetstream.Consumer, transactionID string) (jetstream.Msg, error) {
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		message, err := consumer.Next(jetstream.FetchMaxWait(time.Second))
+		if err != nil {
+			return nil, fmt.Errorf("receive transaction event: %w", err)
+		}
+		var event struct {
+			TransactionID string `json:"transaction_id"`
+		}
+		if err := json.Unmarshal(message.Data(), &event); err != nil {
+			if ackErr := message.Ack(); ackErr != nil {
+				return nil, fmt.Errorf("acknowledge malformed transaction event: %w", ackErr)
+			}
+			return nil, fmt.Errorf("decode transaction event: %w", err)
+		}
+		if event.TransactionID == transactionID {
+			return message, nil
+		}
+		if err := message.Ack(); err != nil {
+			return nil, fmt.Errorf("acknowledge unrelated transaction event: %w", err)
+		}
+	}
+	return nil, fmt.Errorf("timed out waiting for transaction event %s", transactionID)
 }
 
 type migrationResult struct {
