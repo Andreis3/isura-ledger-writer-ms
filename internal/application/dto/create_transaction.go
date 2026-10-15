@@ -233,6 +233,11 @@ func (d *CreateTransactionInput) CreateTransactionFacade() (*transaction.Transac
 	if err := d.validateMetadata(); err != nil {
 		return nil, err
 	}
+	if len(d.Movements) == 0 {
+		return nil, fault.InvalidEntityError(errors.New("transaction must contain at least one movement"), map[string]any{
+			"movements": "must contain at least one movement",
+		})
+	}
 	if d.IdempotencyKey != nil && len([]rune(*d.IdempotencyKey)) > MaxIdempotencyKeyLength {
 		return nil, fault.InvalidEntityError(errors.New("idempotency key is too long"), map[string]any{
 			"idempotency_key": "cannot exceed 50 characters",

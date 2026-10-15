@@ -43,6 +43,7 @@ var _ = Describe("CHAOS :: COMMIT ACK LOSS :: APPLICATION RECOVERY", func() {
 		input := dto.CreateTransactionInput{
 			IdempotencyKey: &key, DebitAccountID: &debit, CreditAccountID: &credit,
 			Amount: &amount, Currency: &currency, Operation: &operation,
+			Movements: []dto.MovementInput{{Type: "TRANSFER", Description: "acknowledged transfer", EntryPositions: []int{0, 1}}},
 		}
 		injected := false
 		faultyUOW := uow.NewUnitOfWorkWithBegin(func(ctx context.Context) (pgx.Tx, error) {
@@ -87,6 +88,8 @@ var _ = Describe("CHAOS :: COMMIT ACK LOSS :: APPLICATION RECOVERY", func() {
 			_, cleanupErr := pool.Exec(ctx, "DELETE FROM outbox_events WHERE aggregate_id=$1", *first.TransactionID)
 			Expect(cleanupErr).NotTo(HaveOccurred())
 			_, cleanupErr = pool.Exec(ctx, "DELETE FROM entries WHERE transaction_id=$1", *first.TransactionID)
+			Expect(cleanupErr).NotTo(HaveOccurred())
+			_, cleanupErr = pool.Exec(ctx, "DELETE FROM movements WHERE transaction_id=$1", *first.TransactionID)
 			Expect(cleanupErr).NotTo(HaveOccurred())
 			_, cleanupErr = pool.Exec(ctx, "DELETE FROM transactions WHERE id=$1", *first.TransactionID)
 			Expect(cleanupErr).NotTo(HaveOccurred())

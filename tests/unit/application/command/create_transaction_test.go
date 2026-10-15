@@ -117,7 +117,7 @@ var _ = Describe("CreateTransaction", func() {
 				EntryID: entry.ID.String(), Position: int64(position), AccountID: entry.AccountID,
 				SequenceNumber: entry.SequenceNumber, Direction: entry.Direction,
 				Amount: entry.Amount.Amount(), Currency: string(entry.Amount.Currency()),
-				RunningBalance: entry.RunningBalance,
+				RunningBalance: entry.RunningBalance, MovementID: transactions.saved.Movements[0].ID.String(),
 			}))
 		}
 	})
@@ -128,9 +128,14 @@ var _ = Describe("CreateTransaction", func() {
 		input.CreditAccountID = nil
 		input.Currency = nil
 		input.Entries = []dto.EntryInput{
-			{AccountID: debitExternalID, Direction: string(transaction.Debit), Amount: 150000, Currency: string(money.BRL)},
+			{AccountID: debitExternalID, Direction: string(transaction.Debit), Amount: 100000, Currency: string(money.BRL)},
 			{AccountID: creditExternalID, Direction: string(transaction.Credit), Amount: 100000, Currency: string(money.BRL)},
 			{AccountID: creditExternalID, Direction: string(transaction.Credit), Amount: 50000, Currency: string(money.BRL)},
+			{AccountID: debitExternalID, Direction: string(transaction.Debit), Amount: 50000, Currency: string(money.BRL)},
+		}
+		input.Movements = []dto.MovementInput{
+			{Type: "TRANSFER", Description: "first leg", EntryPositions: []int{0, 1}},
+			{Type: "TRANSFER", Description: "second leg", EntryPositions: []int{3, 2}},
 		}
 		accounts := newAccountRepository()
 		transactions := &transactionRepository{}
@@ -141,11 +146,12 @@ var _ = Describe("CreateTransaction", func() {
 
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.IdempotentReplay).To(BeFalse())
-		Expect(transactions.saved.Entries).To(HaveLen(3))
+		Expect(transactions.saved.Entries).To(HaveLen(4))
 		Expect(accounts.findCalls).To(Equal([]string{creditExternalID, debitExternalID}))
 		Expect(transactions.saved.Entries[0].AccountID).To(Equal(accounts.accounts[debitExternalID].ID.String()))
 		Expect(transactions.saved.Entries[1].AccountID).To(Equal(accounts.accounts[creditExternalID].ID.String()))
 		Expect(transactions.saved.Entries[2].AccountID).To(Equal(accounts.accounts[creditExternalID].ID.String()))
+		Expect(transactions.saved.Entries[3].AccountID).To(Equal(accounts.accounts[debitExternalID].ID.String()))
 		Expect(transactions.saved.Entries[0].TransactionPosition).To(Equal(int64(0)))
 		Expect(transactions.saved.Entries[1].TransactionPosition).To(Equal(int64(1)))
 		Expect(transactions.saved.Entries[2].TransactionPosition).To(Equal(int64(2)))
@@ -376,6 +382,7 @@ func validInput() dto.CreateTransactionInput {
 		Currency:        &currency,
 		Operation:       &operation,
 		Metadata:        map[string]string{"source": "unit-test"},
+		Movements:       []dto.MovementInput{{Type: "TRANSFER", Description: "unit transfer", EntryPositions: []int{0, 1}}},
 	}
 }
 

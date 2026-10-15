@@ -128,3 +128,80 @@ var _ = Describe("INTERNAL :: INFRA :: POSTGRES :: MODEL :: ENTRY", func() {
 		})
 	})
 })
+
+var _ = Describe("INTERNAL :: INFRA :: POSTGRES :: MODEL :: MOVEMENT", func() {
+	Describe("#ToMovementModel", func() {
+		Context("success cases", func() {
+			It("should map the movement identity and transaction ownership", func() {
+				// Arrange.
+				movement, err := transaction.NewMovementBuilder().WithID().WithType("TRANSFER").
+					WithDescription("main transfer").WithEntries(historicalEntries()).Build()
+				Expect(err).NotTo(HaveOccurred())
+
+				// Act.
+				persisted, err := model.ToMovementModel(movement, "019ff448-c43d-70d3-83c7-dfa067446b01")
+
+				// Assert.
+				Expect(err).NotTo(HaveOccurred())
+				Expect(persisted.ID).To(Equal(pgtype.Text{String: movement.ID.String(), Valid: true}))
+				Expect(persisted.TransactionID).To(Equal(pgtype.Text{String: "019ff448-c43d-70d3-83c7-dfa067446b01", Valid: true}))
+				Expect(persisted.Type.String).To(Equal("TRANSFER"))
+				Expect(persisted.Description.String).To(Equal("main transfer"))
+			})
+		})
+
+		Context("error cases", func() {
+			It("should reject a nil movement", func() {
+				// Act.
+				persisted, err := model.ToMovementModel(nil, "019ff448-c43d-70d3-83c7-dfa067446b01")
+
+				// Assert.
+				Expect(persisted).To(Equal(model.Movement{}))
+				Expect(err).To(MatchError("movement cannot be nil"))
+			})
+		})
+	})
+
+	Describe("#ToMovementDomain", func() {
+		Context("success cases", func() {
+			It("should restore the movement and retain its entry references", func() {
+				// Arrange.
+				entries := historicalEntries()
+				persisted := model.Movement{
+					ID:          pgtype.Text{String: "019ff448-c43d-70d3-83c7-dfa067446b03", Valid: true},
+					Type:        pgtype.Text{String: "TRANSFER", Valid: true},
+					Description: pgtype.Text{String: "main transfer", Valid: true},
+				}
+
+				// Act.
+				movement, err := model.ToMovementDomain(persisted, entries)
+
+				// Assert.
+				Expect(err).NotTo(HaveOccurred())
+				Expect(movement.ID.String()).To(Equal(persisted.ID.String))
+				Expect(movement.Type).To(Equal(persisted.Type.String))
+				Expect(movement.Description).To(Equal(persisted.Description.String))
+				Expect(movement.Entries).To(HaveLen(2))
+				Expect(movement.Entries[0]).To(BeIdenticalTo(entries[0]))
+			})
+		})
+
+		Context("error cases", func() {
+			It("should reject an invalid persisted movement identity", func() {
+				// Arrange.
+				persisted := model.Movement{
+					ID:          pgtype.Text{String: "invalid-id", Valid: true},
+					Type:        pgtype.Text{String: "TRANSFER", Valid: true},
+					Description: pgtype.Text{String: "main transfer", Valid: true},
+				}
+
+				// Act.
+				movement, err := model.ToMovementDomain(persisted, historicalEntries())
+
+				// Assert.
+				Expect(movement).To(BeNil())
+				Expect(err).To(HaveOccurred())
+			})
+		})
+	})
+})

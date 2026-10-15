@@ -338,6 +338,7 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: TRANSACTION REPOSITORY", f
 					{AccountID: debitExternalID, Direction: string(transaction.Debit), Amount: 100, Currency: string(money.BRL)},
 					{AccountID: creditExternalID, Direction: string(transaction.Credit), Amount: 30, Currency: string(money.BRL)},
 				},
+				Movements: []dto.MovementInput{{Type: "TRANSFER", Description: "combined transfer", EntryPositions: []int{0, 1, 2}}},
 			}
 			createTransaction := newIntegrationCreateTransaction(pool)
 
@@ -394,6 +395,7 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: TRANSACTION REPOSITORY", f
 					{AccountID: debitExternalID, Direction: string(transaction.Debit), Amount: 100, Currency: string(money.BRL)},
 					{AccountID: creditExternalID, Direction: string(transaction.Credit), Amount: 100, Currency: string(money.USD)},
 				},
+				Movements: []dto.MovementInput{{Type: "TRANSFER", Description: "mixed currency transfer", EntryPositions: []int{0, 1}}},
 			})
 			Expect(result).To(BeNil())
 			Expect(err).To(HaveOccurred())
@@ -425,6 +427,7 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: TRANSACTION REPOSITORY", f
 						{AccountID: creditExternalID, Direction: string(transaction.Credit), Amount: 60, Currency: string(money.BRL)},
 						{AccountID: creditExternalID, Direction: string(transaction.Credit), Amount: 40, Currency: string(money.BRL)},
 					},
+					Movements: []dto.MovementInput{{Type: "TRANSFER", Description: "concurrent transfer", EntryPositions: []int{0, 1, 2}}},
 				}
 				wg.Add(1)
 				go func() {

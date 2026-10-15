@@ -135,7 +135,11 @@ var _ = Describe("CHAOS :: REAL PROCESS :: POSTGRES TRANSACTION RECOVERY", func(
 		DeferCleanup(func() {
 			cleanupCtx, done := context.WithTimeout(context.Background(), 5*time.Second)
 			defer done()
-			_, err := pool.Exec(cleanupCtx, "DELETE FROM transactions WHERE idempotency_key=$1", key)
+			_, err := pool.Exec(cleanupCtx, "DELETE FROM entries WHERE transaction_id IN (SELECT id FROM transactions WHERE idempotency_key=$1)", key)
+			Expect(err).NotTo(HaveOccurred())
+			_, err = pool.Exec(cleanupCtx, "DELETE FROM movements WHERE transaction_id IN (SELECT id FROM transactions WHERE idempotency_key=$1)", key)
+			Expect(err).NotTo(HaveOccurred())
+			_, err = pool.Exec(cleanupCtx, "DELETE FROM transactions WHERE idempotency_key=$1", key)
 			Expect(err).NotTo(HaveOccurred())
 		})
 	})

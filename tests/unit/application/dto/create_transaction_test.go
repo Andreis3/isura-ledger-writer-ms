@@ -71,6 +71,7 @@ var _ = Describe("CreateTransactionInput", func() {
 			Currency:        stringPointer("BRL"),
 			Operation:       stringPointer("TRANSFER"),
 			Metadata:        map[string]string{"source": "payments-ms"},
+			Movements:       []dto.MovementInput{{Type: "TRANSFER", Description: "transfer", EntryPositions: []int{0, 1}}},
 		}
 
 		entity, err := input.CreateTransactionFacade()
@@ -167,6 +168,7 @@ var _ = Describe("INTERNAL :: APPLICATION :: DTO :: CREATE TRANSACTION", func() 
 					DebitAccountID:  stringPointer("d290f1ee-6c54-4b01-90e6-d701748f0851"),
 					CreditAccountID: stringPointer("a290f1ee-6c54-4b01-90e6-d701748f0852"),
 					Amount:          intPointer(150000), Currency: stringPointer("BRL"), Operation: stringPointer("TRANSFER"),
+					Movements: []dto.MovementInput{{Type: "TRANSFER", Description: "transfer", EntryPositions: []int{0, 1}}},
 				}
 				entries, err := input.CreateTransactionFacade()
 				Expect(err).NotTo(HaveOccurred())
@@ -183,6 +185,7 @@ var _ = Describe("INTERNAL :: APPLICATION :: DTO :: CREATE TRANSACTION", func() 
 						{AccountID: "a290f1ee-6c54-4b01-90e6-d701748f0852", Direction: "CREDIT", Amount: 150000, Currency: "BRL"},
 						{AccountID: "d290f1ee-6c54-4b01-90e6-d701748f0851", Direction: "DEBIT", Amount: 150000, Currency: "BRL"},
 					},
+					Movements: []dto.MovementInput{{Type: "TRANSFER", Description: "transfer", EntryPositions: []int{0, 1}}},
 				}).Fingerprint()
 				Expect(err).NotTo(HaveOccurred())
 				Expect(legacyFingerprint).To(Equal(explicitFingerprint))
@@ -253,19 +256,37 @@ var _ = Describe("INTERNAL :: APPLICATION :: DTO :: CREATE TRANSACTION", func() 
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).NotTo(ContainSubstring("sensitive description"))
 			})
+
+			It("should reject creation requests without movements", func() {
+				input := multiEntryInput()
+				input.Movements = nil
+
+				entity, err := input.CreateTransactionFacade()
+
+				Expect(entity).To(BeNil())
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("must contain at least one movement"))
+			})
 			It("should build every requested entry in input order", func() {
 				input := multiEntryInput()
 				input.IdempotencyKey = stringPointer("multi-1")
 				input.Entries = append(input.Entries, dto.EntryInput{
 					AccountID: "b290f1ee-6c54-4b01-90e6-d701748f0853", Direction: "CREDIT", Amount: 25, Currency: "BRL",
 				})
-				input.Entries[0].Amount = 125
+				input.Entries[0].Amount = 100
+				input.Entries = append(input.Entries, dto.EntryInput{
+					AccountID: "c290f1ee-6c54-4b01-90e6-d701748f0854", Direction: "DEBIT", Amount: 25, Currency: "BRL",
+				})
 				input.Amount = intPointer(125)
+				input.Movements = []dto.MovementInput{
+					{Type: "TRANSFER", Description: "first leg", EntryPositions: []int{0, 1}},
+					{Type: "TRANSFER", Description: "second leg", EntryPositions: []int{3, 2}},
+				}
 
 				entity, err := input.CreateTransactionFacade()
 
 				Expect(err).NotTo(HaveOccurred())
-				Expect(entity.Entries).To(HaveLen(3))
+				Expect(entity.Entries).To(HaveLen(4))
 				Expect(entity.Entries[0].Direction).To(Equal(transaction.Debit))
 				Expect(entity.Entries[1].Direction).To(Equal(transaction.Credit))
 				Expect(entity.Entries[2].AccountExternalID).To(Equal(input.Entries[2].AccountID))
@@ -295,6 +316,7 @@ var _ = Describe("INTERNAL :: APPLICATION :: DTO :: CREATE TRANSACTION", func() 
 					Amount:          intPointer(100),
 					Currency:        stringPointer("BRL"),
 					Operation:       stringPointer("TRANSFER"),
+					Movements:       []dto.MovementInput{{Type: "TRANSFER", Description: "transfer", EntryPositions: []int{0, 1}}},
 				}
 
 				entity, err := input.CreateTransactionFacade()
@@ -310,6 +332,7 @@ func multiEntryInput() dto.CreateTransactionInput {
 	return dto.CreateTransactionInput{
 		Amount:    intPointer(100),
 		Operation: stringPointer("TRANSFER"),
+		Movements: []dto.MovementInput{{Type: "TRANSFER", Description: "transfer", EntryPositions: []int{0, 1}}},
 		Entries: []dto.EntryInput{
 			{AccountID: "d290f1ee-6c54-4b01-90e6-d701748f0851", Direction: "DEBIT", Amount: 100, Currency: "BRL", Metadata: map[string]string{"leg": "source"}},
 			{AccountID: "a290f1ee-6c54-4b01-90e6-d701748f0852", Direction: "CREDIT", Amount: 100, Currency: "BRL", Metadata: map[string]string{"leg": "destination"}},

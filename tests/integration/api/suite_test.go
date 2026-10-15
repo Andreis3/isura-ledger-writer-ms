@@ -171,6 +171,11 @@ var _ = Describe("REST API", func() {
 				Operation      string         `json:"operation"`
 				Amount         int            `json:"amount"`
 				Entries        []requestEntry `json:"entries"`
+				Movements      []struct {
+					Type           string `json:"type"`
+					Description    string `json:"description"`
+					EntryPositions []int  `json:"entry_positions"`
+				} `json:"movements"`
 			}
 			type result struct {
 				response *httptest.ResponseRecorder
@@ -192,9 +197,21 @@ var _ = Describe("REST API", func() {
 						AccountID: accountID, Direction: direction, Amount: 1, Currency: "BRL",
 					})
 				}
+				movements := make([]struct {
+					Type           string `json:"type"`
+					Description    string `json:"description"`
+					EntryPositions []int  `json:"entry_positions"`
+				}, 0, entriesPerRequest/2)
+				for position := 0; position < entriesPerRequest; position += 2 {
+					movements = append(movements, struct {
+						Type           string `json:"type"`
+						Description    string `json:"description"`
+						EntryPositions []int  `json:"entry_positions"`
+					}{Type: "TRANSFER", Description: "transfer leg", EntryPositions: []int{position, position + 1}})
+				}
 				body, err := json.Marshal(transactionRequest{
 					IdempotencyKey: uuid.NewString(), Operation: "TRANSFER", Amount: entriesPerRequest / 2,
-					Entries: entries,
+					Entries: entries, Movements: movements,
 				})
 				Expect(err).NotTo(HaveOccurred())
 				requests[requestIndex] = string(body)
@@ -242,7 +259,7 @@ var _ = Describe("REST API", func() {
 			debitAccount := createAccountThroughAPI("LIABILITY")
 			creditAccount := createAccountThroughAPI("ASSET")
 			idempotencyKey := uuid.NewString()
-			requestBody := fmt.Sprintf(`{"debit_account_id":%q,"credit_account_id":%q,"amount":1250,"currency":"BRL","operation":"TRANSFER"}`, debitAccount, creditAccount)
+			requestBody := fmt.Sprintf(`{"debit_account_id":%q,"credit_account_id":%q,"amount":1250,"currency":"BRL","operation":"TRANSFER","movements":[{"type":"TRANSFER","description":"api transfer","entry_positions":[0,1]}]}`, debitAccount, creditAccount)
 
 			// Act
 			first := callAPI(http.MethodPost, "/transactions", requestBody, idempotencyKey)

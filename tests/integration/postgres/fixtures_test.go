@@ -237,6 +237,7 @@ func executeIntegrationTransaction(ctx context.Context, createTransaction *comma
 		Amount:          &amount,
 		Currency:        &currency,
 		Operation:       &operation,
+		Movements:       []dto.MovementInput{{Type: "TRANSFER", Description: "integration transfer", EntryPositions: []int{0, 1}}},
 	})
 	return commandResult{output: output, err: err}
 }
