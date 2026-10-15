@@ -67,6 +67,51 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: TRANSACTION REPOSITORY", f
 			Expect(byID.Entries[0].TransactionPosition).To(Equal(int64(0)))
 			Expect(byID.Entries[1].TransactionPosition).To(Equal(int64(1)))
 		})
+		It("should persist movement references and keep legacy transactions readable", func() {
+			// Arrange.
+			accountA, accountB := insertCommittedAccounts(ctx, pool)
+			entityTransaction := newTransaction(accountA, accountB)
+			movement, err := transaction.NewMovementBuilder().WithID().WithType("TRANSFER").WithDescription("principal transfer").
+				WithEntries(entityTransaction.Entries).Build()
+			Expect(err).NotTo(HaveOccurred())
+			entityTransaction, err = transaction.NewTransactionBuilder().WithID(entityTransaction.ID.String()).
+				WithIdempotencyKey(entityTransaction.IdempotencyKey).WithFingerprint(entityTransaction.Fingerprint).
+				WithStatus(entityTransaction.Status).WithAmount(entityTransaction.Amount).WithOperation(entityTransaction.Operation).
+				WithEntries(entityTransaction.Entries).WithMovements([]*transaction.Movement{movement}).Build()
+			Expect(err).NotTo(HaveOccurred())
+			defer cleanupCommittedAccounts(ctx, pool, []string{accountA, accountB}, []string{entityTransaction.ID.String()})
+			repo := repository.NewTransactionRepository(pool)
+
+			// Act.
+			err = uow.NewUnitOfWork(pool).WithTransaction(ctx, func(txContext context.Context) error {
+				if err := prepareTransactionLedger(ctx, txContext, entityTransaction, pool); err != nil {
+					return err
+				}
+				return repo.Save(txContext, entityTransaction)
+			})
+			Expect(err).NotTo(HaveOccurred())
+			loaded, err := repo.Find(ctx, transaction.TransactionCriteria{ID: new(entityTransaction.ID.String()), WithEntries: true})
+
+			// Assert.
+			Expect(err).NotTo(HaveOccurred())
+			Expect(loaded.Movements).To(HaveLen(1))
+			Expect(loaded.Movements[0].ID).To(Equal(movement.ID))
+			Expect(loaded.Movements[0].Entries).To(HaveLen(2))
+			Expect(loaded.Movements[0].Entries[0]).To(BeIdenticalTo(loaded.Entries[0]))
+			Expect(loaded.Movements[0].Entries[1]).To(BeIdenticalTo(loaded.Entries[1]))
+
+			legacy := newTransaction(accountA, accountB)
+			defer cleanupCommittedAccounts(ctx, pool, []string{accountA, accountB}, []string{legacy.ID.String()})
+			Expect(uow.NewUnitOfWork(pool).WithTransaction(ctx, func(txContext context.Context) error {
+				if err := prepareTransactionLedger(ctx, txContext, legacy, pool); err != nil {
+					return err
+				}
+				return repo.Save(txContext, legacy)
+			})).To(Succeed())
+			legacyLoaded, err := repo.Find(ctx, transaction.TransactionCriteria{ID: new(legacy.ID.String()), WithEntries: true})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(legacyLoaded.Movements).To(BeNil())
+		})
 		It("should preserve input positions and apply repeated account entries progressively", func() {
 			accountA, accountB := insertCommittedAccounts(ctx, pool)
 			entityTransaction := newMultiEntryTransaction(accountA, accountB)
@@ -210,12 +255,14 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: TRANSACTION REPOSITORY", f
 			operation := string(transaction.OperationTransfer)
 			newInput := func() dto.CreateTransactionInput {
 				return dto.CreateTransactionInput{
-					IdempotencyKey:  &key,
-					DebitAccountID:  &debitExternalID,
-					CreditAccountID: &creditExternalID,
-					Amount:          &amount,
-					Currency:        &currency,
-					Operation:       &operation,
+					IdempotencyKey: &key,
+					Entries: []dto.EntryInput{
+						{AccountID: debitExternalID, Direction: string(transaction.Debit), Amount: amount, Currency: currency},
+						{AccountID: creditExternalID, Direction: string(transaction.Credit), Amount: amount, Currency: currency},
+					},
+					Movements: []dto.MovementInput{{Type: "TRANSFER", Description: "concurrent transfer", EntryPositions: []int{0, 1}}},
+					Amount:    &amount,
+					Operation: &operation,
 				}
 			}
 
@@ -260,13 +307,21 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: TRANSACTION REPOSITORY", f
 			}
 			Expect(replays).To(Equal(1))
 
+			conflictingInput := newInput()
+			conflictingInput.Movements[0].Description = "different movement"
+			conflictResult, err := createTransaction.Execute(ctx, conflictingInput)
+			Expect(conflictResult).To(BeNil())
+			Expect(errors.Is(err, fault.ErrIdempotencyConflict)).To(BeTrue())
+
 			var count int
 			Expect(pool.QueryRow(ctx, "SELECT count(*) FROM transactions WHERE idempotency_key = $1", key).Scan(&count)).To(Succeed())
 			Expect(count).To(Equal(1))
-			var entries, outboxes int
+			var entries, movements, outboxes int
 			Expect(pool.QueryRow(ctx, "SELECT count(*) FROM entries WHERE transaction_id = $1", transactionID).Scan(&entries)).To(Succeed())
+			Expect(pool.QueryRow(ctx, "SELECT count(*) FROM movements WHERE transaction_id = $1", transactionID).Scan(&movements)).To(Succeed())
 			Expect(pool.QueryRow(ctx, "SELECT count(*) FROM outbox_events WHERE aggregate_id = $1", transactionID).Scan(&outboxes)).To(Succeed())
 			Expect(entries).To(Equal(2))
+			Expect(movements).To(Equal(1))
 			Expect(outboxes).To(Equal(1))
 		})
 		It("should create, replay, and reject conflicting multi-entry intents atomically", func() {
@@ -283,6 +338,7 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: TRANSACTION REPOSITORY", f
 					{AccountID: debitExternalID, Direction: string(transaction.Debit), Amount: 100, Currency: string(money.BRL)},
 					{AccountID: creditExternalID, Direction: string(transaction.Credit), Amount: 30, Currency: string(money.BRL)},
 				},
+				Movements: []dto.MovementInput{{Type: "TRANSFER", Description: "combined transfer", EntryPositions: []int{0, 1, 2}}},
 			}
 			createTransaction := newIntegrationCreateTransaction(pool)
 
@@ -339,6 +395,7 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: TRANSACTION REPOSITORY", f
 					{AccountID: debitExternalID, Direction: string(transaction.Debit), Amount: 100, Currency: string(money.BRL)},
 					{AccountID: creditExternalID, Direction: string(transaction.Credit), Amount: 100, Currency: string(money.USD)},
 				},
+				Movements: []dto.MovementInput{{Type: "TRANSFER", Description: "mixed currency transfer", EntryPositions: []int{0, 1}}},
 			})
 			Expect(result).To(BeNil())
 			Expect(err).To(HaveOccurred())
@@ -370,6 +427,7 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: TRANSACTION REPOSITORY", f
 						{AccountID: creditExternalID, Direction: string(transaction.Credit), Amount: 60, Currency: string(money.BRL)},
 						{AccountID: creditExternalID, Direction: string(transaction.Credit), Amount: 40, Currency: string(money.BRL)},
 					},
+					Movements: []dto.MovementInput{{Type: "TRANSFER", Description: "concurrent transfer", EntryPositions: []int{0, 1, 2}}},
 				}
 				wg.Add(1)
 				go func() {

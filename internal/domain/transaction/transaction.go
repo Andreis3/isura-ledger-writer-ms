@@ -2,6 +2,9 @@ package transaction
 
 import (
 	"errors"
+	"math"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/andreis3/isura-ledger-ms/internal/domain/entity"
@@ -77,6 +80,7 @@ type TransactionBuilder struct {
 	status         TransactionStatus
 	operation      Operation
 	entries        []*Entry
+	movements      []*Movement
 	amount         money.Money
 	createdAt      time.Time
 	updatedAt      time.Time
@@ -92,6 +96,7 @@ type Transaction struct {
 	Operation      Operation
 	Amount         money.Money
 	Entries        []*Entry
+	Movements      []*Movement
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
 	Fingerprint    string
@@ -162,6 +167,84 @@ func (b *TransactionBuilder) WithEntries(entries []*Entry) *TransactionBuilder {
 	b.entries = append([]*Entry(nil), entries...)
 	b.validateEntries()
 	return b
+}
+
+// WithMovements adds the balanced groups associated with this transaction's entries.
+func (b *TransactionBuilder) WithMovements(movements []*Movement) *TransactionBuilder {
+	b.movements = append([]*Movement(nil), movements...)
+	return b
+}
+
+func (b *TransactionBuilder) validateMovements() {
+	if len(b.movements) == 0 {
+		return // Empty is valid when reconstructing a historical transaction.
+	}
+
+	entryByID := make(map[string]*Entry, len(b.entries))
+	for _, entry := range b.entries {
+		if entry != nil {
+			entryByID[entry.ID.String()] = entry
+		}
+	}
+	assigned := make(map[string]struct{}, len(b.entries))
+	for movementIndex, movement := range b.movements {
+		field := "movements[" + strconv.Itoa(movementIndex) + "]"
+		if movement == nil {
+			b.eval.CheckField(false, "movements", "movement cannot be nil")
+			continue
+		}
+		b.eval.CheckField(strings.TrimSpace(movement.Type) != "", field+".type", "cannot be blank")
+		b.eval.CheckField(strings.TrimSpace(movement.Description) != "", field+".description", "cannot be blank")
+		b.eval.CheckField(len(movement.Entries) > 0, field+".entries", "must contain at least one entry")
+
+		var debitTotal, creditTotal int64
+		var currency money.Currency
+		hasCurrency := false
+		for _, entry := range movement.Entries {
+			if entry == nil {
+				b.eval.CheckField(false, field+".entries", "entry cannot be nil")
+				continue
+			}
+			entryID := entry.ID.String()
+			if _, exists := entryByID[entryID]; !exists || entryID == "" {
+				b.eval.CheckField(false, field+".entries", "entry does not belong to transaction")
+				continue
+			}
+			if _, exists := assigned[entryID]; exists {
+				b.eval.CheckField(false, field+".entries", "entry is assigned to multiple movements")
+				continue
+			}
+			assigned[entryID] = struct{}{}
+			if !hasCurrency {
+				currency = entry.Amount.Currency()
+				hasCurrency = true
+			} else if currency != entry.Amount.Currency() {
+				b.eval.CheckField(false, field+".entries", "movement entries must use the same currency")
+				continue
+			}
+			amount := entry.Amount.Amount()
+			if entry.Direction == Debit {
+				if amount > 0 && debitTotal > math.MaxInt64-amount {
+					b.eval.CheckField(false, field+".entries", "debit total overflows")
+					continue
+				}
+				debitTotal += amount
+			} else if entry.Direction == Credit {
+				if amount > 0 && creditTotal > math.MaxInt64-amount {
+					b.eval.CheckField(false, field+".entries", "credit total overflows")
+					continue
+				}
+				creditTotal += amount
+			}
+		}
+		b.eval.CheckField(debitTotal > 0 && creditTotal > 0 && debitTotal == creditTotal, field+".entries", "movement entries must balance")
+	}
+	for _, entry := range b.entries {
+		if entry != nil {
+			_, exists := assigned[entry.ID.String()]
+			b.eval.CheckField(exists, "movements", "every transaction entry must belong to exactly one movement")
+		}
+	}
 }
 
 func (b *TransactionBuilder) validateEntries() {
@@ -293,6 +376,7 @@ func (b *TransactionBuilder) WithMetadata(metadata map[string]string) *Transacti
 
 // Build builds the transaction
 func (b *TransactionBuilder) Build() (*Transaction, error) {
+	b.validateMovements()
 	if b.operation == OperationTransfer && len(b.entries) == 0 {
 		b.eval.CheckField(false, "entries", ErrInvalidTransfer.Error())
 	}
@@ -309,6 +393,7 @@ func (b *TransactionBuilder) Build() (*Transaction, error) {
 		Operation:      b.operation,
 		Amount:         b.amount,
 		Entries:        b.entries,
+		Movements:      b.movements,
 		CreatedAt:      shared.CoalesceTime(b.createdAt, now),
 		UpdatedAt:      shared.CoalesceTime(b.updatedAt, now),
 		Fingerprint:    b.fingerprint,

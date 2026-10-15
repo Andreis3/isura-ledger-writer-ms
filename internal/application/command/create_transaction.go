@@ -91,12 +91,12 @@ func (c *CreateTransaction) Execute(ctx context.Context, input dto.CreateTransac
 				return c.fail(span, resolveErr, "commit outcome uncertain")
 			}
 			output = resolved
-			} else {
-		replay, replayErr := c.replayAfterIdempotencyRace(ctx, input, requestFingerprint, err)
-		if replayErr != nil {
-			return c.fail(span, replayErr, "transaction failed")
-		}
-		output = replay
+		} else {
+			replay, replayErr := c.replayAfterIdempotencyRace(ctx, input, requestFingerprint, err)
+			if replayErr != nil {
+				return c.fail(span, replayErr, "transaction failed")
+			}
+			output = replay
 		}
 	}
 	if output == nil {
@@ -168,6 +168,9 @@ func (c *CreateTransaction) persistNewTransaction(
 	if err := service.AssignLedgerEntries(ctx, c.transactionRepository, entityTransaction, accounts...); err != nil {
 		return err
 	}
+	if err := resolveMovementEntries(entityTransaction, input.Movements); err != nil {
+		return err
+	}
 	if err := entityTransaction.Complete(); err != nil {
 		return err
 	}
@@ -175,6 +178,41 @@ func (c *CreateTransaction) persistNewTransaction(
 		return err
 	}
 	return c.saveCreatedEvent(ctx, entityTransaction, input)
+}
+
+func resolveMovementEntries(entityTransaction *transaction.Transaction, movements []dto.MovementInput) error {
+	if len(movements) == 0 {
+		return nil
+	}
+	if len(entityTransaction.Movements) != len(movements) {
+		return fault.InvalidEntityError(errors.New("movement references do not match the transaction"), map[string]any{
+			"movements": "movement references are invalid",
+		})
+	}
+	resolved := make([]*transaction.Movement, 0, len(movements))
+	for index, requested := range movements {
+		entries := make([]*transaction.Entry, 0, len(requested.EntryPositions))
+		for _, position := range requested.EntryPositions {
+			if position < 0 || position >= len(entityTransaction.Entries) {
+				return fault.InvalidEntityError(errors.New("movement entry position is invalid"), map[string]any{
+					"movements": "entry position is outside the entries collection",
+				})
+			}
+			entries = append(entries, entityTransaction.Entries[position])
+		}
+		movementID := entityTransaction.Movements[index].ID.String()
+		movement, err := transaction.NewMovementBuilder().WithID(movementID).
+			WithType(requested.Type).
+			WithDescription(requested.Description).
+			WithEntries(entries).
+			Build()
+		if err != nil {
+			return err
+		}
+		resolved = append(resolved, movement)
+	}
+	entityTransaction.Movements = resolved
+	return nil
 }
 
 func requestedEntryCount(input dto.CreateTransactionInput) int {
@@ -202,25 +240,25 @@ func creditAccountID(input dto.CreateTransactionInput) string {
 // opening a new write transaction. A failed or absent lookup retains the
 // indeterminate outcome so callers never assume that a second write is safe.
 func (c *CreateTransaction) resolveUnknownCommit(
- ctx context.Context,
- input dto.CreateTransactionInput,
- fingerprint string,
- commitErr error,
+	ctx context.Context,
+	input dto.CreateTransactionInput,
+	fingerprint string,
+	commitErr error,
 ) (*dto.CreateTransactionOutput, error) {
- if input.IdempotencyKey == nil || *input.IdempotencyKey == "" {
-  return nil, commitErr
- }
- lookupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
- defer cancel()
- existing, err := c.findByIdempotencyKey(lookupCtx, input.IdempotencyKey)
- if err != nil || existing == nil {
-  return nil, errors.Join(commitErr, err)
- }
- if existing.Fingerprint != fingerprint {
-  c.metrics.RecordIdempotencyTotal("conflict")
-  return nil, fault.IdempotencyConflictError(errors.New("idempotency fingerprint mismatch"))
- }
- return replayOutput(existing), nil
+	if input.IdempotencyKey == nil || *input.IdempotencyKey == "" {
+		return nil, commitErr
+	}
+	lookupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+	existing, err := c.findByIdempotencyKey(lookupCtx, input.IdempotencyKey)
+	if err != nil || existing == nil {
+		return nil, errors.Join(commitErr, err)
+	}
+	if existing.Fingerprint != fingerprint {
+		c.metrics.RecordIdempotencyTotal("conflict")
+		return nil, fault.IdempotencyConflictError(errors.New("idempotency fingerprint mismatch"))
+	}
+	return replayOutput(existing), nil
 }
 
 func (c *CreateTransaction) replayAfterIdempotencyRace(

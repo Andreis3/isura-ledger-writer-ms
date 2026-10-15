@@ -60,7 +60,7 @@ func ToTransactionModel(domain *transaction.Transaction) (Transaction, error) {
 	}, nil
 }
 
-func ToTransactionDomain(persisted Transaction, entries []*transaction.Entry) (*transaction.Transaction, error) {
+func ToTransactionDomain(persisted Transaction, entries []*transaction.Entry, movements ...[]*transaction.Movement) (*transaction.Transaction, error) {
 	amount, err := money.NewMoney(persisted.Amount.Int64, money.Currency(persisted.Currency.String))
 	if err != nil {
 		return nil, err
@@ -73,6 +73,10 @@ func ToTransactionDomain(persisted Transaction, entries []*transaction.Entry) (*
 	if err != nil {
 		return nil, err
 	}
+	var transactionMovements []*transaction.Movement
+	if len(movements) > 0 {
+		transactionMovements = movements[0]
+	}
 	return transaction.NewTransactionBuilder().
 		WithID(id.String()).
 		WithIdempotencyKey(persisted.IdempotencyKey.String).
@@ -84,5 +88,6 @@ func ToTransactionDomain(persisted Transaction, entries []*transaction.Entry) (*
 		WithUpdatedAt(persisted.UpdatedAt.Time).
 		WithAmount(amount).
 		WithEntries(entries).
+		WithMovements(transactionMovements).
 		Build()
 }

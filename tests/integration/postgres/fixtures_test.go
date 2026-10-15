@@ -107,6 +107,8 @@ func insertCommittedAccounts(ctx context.Context, pool *pgxpool.Pool) (string, s
 func cleanupCommittedAccounts(ctx context.Context, pool *pgxpool.Pool, accountIDs, transactionIDs []string) {
 	_, err := pool.Exec(ctx, `DELETE FROM entries WHERE account_id = ANY($1)`, accountIDs)
 	Expect(err).NotTo(HaveOccurred())
+	_, err = pool.Exec(ctx, `DELETE FROM movements WHERE transaction_id = ANY($1)`, transactionIDs)
+	Expect(err).NotTo(HaveOccurred())
 	_, err = pool.Exec(ctx, `DELETE FROM transactions WHERE id = ANY($1)`, transactionIDs)
 	Expect(err).NotTo(HaveOccurred())
 	_, err = pool.Exec(ctx, `DELETE FROM accounts WHERE id = ANY($1)`, accountIDs)
@@ -235,6 +237,7 @@ func executeIntegrationTransaction(ctx context.Context, createTransaction *comma
 		Amount:          &amount,
 		Currency:        &currency,
 		Operation:       &operation,
+		Movements:       []dto.MovementInput{{Type: "TRANSFER", Description: "integration transfer", EntryPositions: []int{0, 1}}},
 	})
 	return commandResult{output: output, err: err}
 }

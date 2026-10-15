@@ -28,6 +28,7 @@ var _ = Describe("INTERNAL :: APPLICATION :: COMMAND :: CREATE TRANSACTION", fun
 					{AccountID: creditExternalID, Direction: string(transaction.Credit), Amount: 100000, Currency: string(money.BRL)},
 					{AccountID: creditExternalID, Direction: string(transaction.Credit), Amount: 50000, Currency: string(money.BRL)},
 				}
+				input.Movements = []dto.MovementInput{{Type: "TRANSFER", Description: "principal transfer", EntryPositions: []int{0, 1, 2}}}
 				outboxes := &outboxRepository{}
 				transactions := &transactionRepository{}
 				sut := newCommand(newAccountRepository(), transactions, outboxes, &unitOfWork{})
@@ -42,18 +43,28 @@ var _ = Describe("INTERNAL :: APPLICATION :: COMMAND :: CREATE TRANSACTION", fun
 				var event transaction.TransactionCreated
 				Expect(json.Unmarshal(outboxes.saved.Payload, &event)).To(Succeed())
 				Expect(event.EventID).To(Equal(outboxes.saved.ID.String()))
+				Expect(event.EventVersion).To(Equal(1))
 				Expect(event.TransactionID).To(Equal(*output.TransactionID))
 				Expect(event.IdempotencyKey).To(Equal(*input.IdempotencyKey))
 				Expect(event.Status).To(Equal(string(transaction.Completed)))
 				Expect(event.Amount).To(Equal(int64(150000)))
 				Expect(event.Currency).To(Equal(string(money.BRL)))
 				Expect(event.Entries).To(HaveLen(3))
+				Expect(event.Movements).To(HaveLen(1))
+				Expect(event.Movements[0].MovementID).To(Equal(transactions.saved.Movements[0].ID.String()))
+				Expect(event.Movements[0].EntryIDs).To(HaveLen(3))
 				for position, entry := range event.Entries {
+					persisted := transactions.saved.Entries[position]
 					Expect(entry.Position).To(Equal(int64(position)))
-					Expect(entry.AccountID).To(Equal(transactions.saved.Entries[position].AccountID))
+					Expect(entry.EntryID).To(Equal(persisted.ID.String()))
+					Expect(entry.AccountID).To(Equal(persisted.AccountID))
+					Expect(entry.SequenceNumber).To(Equal(persisted.SequenceNumber))
+					Expect(entry.RunningBalance).To(Equal(persisted.RunningBalance))
+					Expect(entry.MovementID).To(Equal(transactions.saved.Movements[0].ID.String()))
 					Expect(entry.Amount).To(Equal(input.Entries[position].Amount))
 					Expect(entry.Direction).To(Equal(transaction.Direction(input.Entries[position].Direction)))
 				}
+				Expect(event.Movements[0].EntryIDs).To(Equal([]string{event.Entries[0].EntryID, event.Entries[1].EntryID, event.Entries[2].EntryID}))
 			})
 		})
 		Context("error cases", func() {

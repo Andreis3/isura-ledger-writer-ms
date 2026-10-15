@@ -5,6 +5,7 @@ package postgres_test
 import (
 	"context"
 	"errors"
+	"github.com/andreis3/isura-ledger-ms/internal/domain/transaction"
 	database "github.com/andreis3/isura-ledger-ms/internal/infra/postgres/database"
 	repository "github.com/andreis3/isura-ledger-ms/internal/infra/postgres/repository"
 	uow "github.com/andreis3/isura-ledger-ms/internal/infra/postgres/uow"
@@ -77,13 +78,21 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: UNIT OF WORK", func() {
 			// Arrange: accounts are committed so the UoW can read them independently.
 			accountA, accountB := insertCommittedAccounts(ctx, pool)
 			entityTransaction := newMultiEntryTransaction(accountA, accountB)
+			movement, err := transaction.NewMovementBuilder().WithID().WithType("TRANSFER").WithDescription("atomic movement").
+				WithEntries(entityTransaction.Entries).Build()
+			Expect(err).NotTo(HaveOccurred())
+			entityTransaction, err = transaction.NewTransactionBuilder().WithID(entityTransaction.ID.String()).
+				WithIdempotencyKey(entityTransaction.IdempotencyKey).WithFingerprint(entityTransaction.Fingerprint).
+				WithStatus(entityTransaction.Status).WithAmount(entityTransaction.Amount).WithOperation(entityTransaction.Operation).
+				WithEntries(entityTransaction.Entries).WithMovements([]*transaction.Movement{movement}).Build()
+			Expect(err).NotTo(HaveOccurred())
 			defer cleanupCommittedAccounts(ctx, pool, []string{accountA, accountB}, []string{entityTransaction.ID.String()})
 			transactionRepo := repository.NewTransactionRepository(pool)
 			outboxRepo := repository.NewOutBoxRepository(pool)
 			failure := errors.New("simulate downstream failure after outbox write")
 
 			// Act: persist transaction, four postings and the outbox event, then fail.
-			err := uow.NewUnitOfWork(pool).WithTransaction(ctx, func(txCtx context.Context) error {
+			err = uow.NewUnitOfWork(pool).WithTransaction(ctx, func(txCtx context.Context) error {
 				if err := prepareTransactionLedger(ctx, txCtx, entityTransaction, pool); err != nil {
 					return err
 				}
@@ -108,9 +117,12 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: UNIT OF WORK", func() {
 				return failure
 			})
 
-			// Assert: no transaction, posting, or event leaks past rollback.
+			// Assert: no transaction, posting, movement, or event leaks past rollback.
 			Expect(errors.Is(err, failure)).To(BeTrue())
 			assertLedgerRecords(ctx, pool, entityTransaction.ID.String(), 0, 0, 0)
+			var movements int
+			Expect(pool.QueryRow(ctx, "SELECT count(*) FROM movements WHERE transaction_id = $1", entityTransaction.ID.String()).Scan(&movements)).To(Succeed())
+			Expect(movements).To(BeZero())
 			for _, accountID := range []string{accountA, accountB} {
 				var count int
 				Expect(pool.QueryRow(ctx, "SELECT count(*) FROM entries WHERE account_id = $1", accountID).Scan(&count)).To(Succeed())
