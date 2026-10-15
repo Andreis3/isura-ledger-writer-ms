@@ -177,7 +177,11 @@ COMMIT
 
 ### Idempotency
 
-Every transaction carries an `idempotency_key`. A `UNIQUE CONSTRAINT` on the `transactions` table ensures that concurrent retries with the same key result in exactly one committed transaction — even if two requests race past the application-level `ExistsByIdempotencyKey` check.
+The `transactions.idempotency_key` has a **global UNIQUE index** in the Writer database, not a per-account or per-movement scope. Callers must therefore supply a key that is unique across the entire Writer namespace.
+
+The request fingerprint includes the normalized posting intent, movement descriptions, movement types and entry positions. The same key with the **same** fingerprint returns the original transaction ID and `idempotent_replay: true` (no new entries, movements, or outbox event). The same key with a **different** fingerprint is an idempotency conflict. Concurrent unique-key races are resolved by looking up the committed transaction; an ambiguous commit is investigated by idempotency key instead of blindly submitting a second write.
+
+> Trade-off: global uniqueness simplifies enforcement but requires cross-product key coordination or namespace-prefixed keys. A per-tenant/account key scope would require schema and contract changes; it is not the current implementation.
 
 ### Unit of Work
 
@@ -192,6 +196,37 @@ return c.uow.WithRetryableTransaction(ctx, func(ctxTx context.Context) error {
     return c.outboxRepository.Save(ctxTx, event)
 })
 ```
+
+### Running balance and concurrency trade-offs
+
+Each `Entry` stores its **own immutable `running_balance`** and `sequence_number`, both calculated on the write path. The latest entry for an account is the operational source of its balance. **The normal posting path does not `UPDATE` a single balance row per posting**: it inserts new entries. A separate existing `balances` table supports a legacy/bootstrap flow and is not the transactional balance authority. Historical backfill is an explicitly separate maintenance path.
+
+This approach allows deterministic per-account reconstruction and efficient latest-balance lookups, at the cost of write-side sequencing and contention for **hot accounts** (for example a shared settlement account). Distinct transactions can contend even without balance-row updates because they compete for the next account sequence and serializable validation.
+
+The Unit of Work uses PostgreSQL `SERIALIZABLE` transactions. The write path obtains the latest ledger state and assigns a new per-account sequence; `UNIQUE(account_id, sequence_number)` provides a final conflict guard. Supported serialization/concurrency conflicts are retried with bounded exponential backoff and jitter (default maximum **5 attempts**). Under sustained contention, requests can still fail after retries; these failures should be monitored. A balance cache or checkpoint is an architectural alternative, **not** the source of truth in the current normal write path.
+
+### Outbox delivery semantics
+
+The current implementation is a **polling relay**, not Debezium/CDC. It claims pending/failed Outbox records in PostgreSQL, publishes batches using bounded concurrent workers to NATS JetStream, and records the publish result. Each message uses the outbox identifier as `Nats-Msg-Id` for broker-side deduplication.
+
+The delivery contract is **at least once**, not end-to-end exactly once. A relay can publish successfully and lose the acknowledgment or fail before recording `SUCCESS` in PostgreSQL; a later retry can therefore redeliver. JetStream deduplication is bounded by its configured duplicate window. Consumers (including the future Java Reader) must deduplicate using stable `event_id` values and apply projections idempotently. Consumers projecting per-account balances must also handle event reordering or gaps using entry `sequence_number`. An Outbox row or a JetStream stream is **not** an indefinite event archive by default.
+
+### Currency scope and financial controls
+
+Accounts record their currency, and transaction entries must be in one matching currency: **a single current transaction cannot post entries in multiple currencies**. The system supports currency-specific amounts, not an implemented cross-currency/FX booking model. FX would require explicit conversion/rate records and additional accounting invariants.
+
+The repository contains a ledger reconciliation routine that replays account entries and checks persisted running balances. This is distinct from **end-of-period accounting close**, which is not established as implemented here. Period closing, retention policies, operational SLAs, backup schedules and PostgreSQL point-in-time recovery (PITR) targets must be separately defined before production readiness claims.
+
+### Production-readiness decisions still required
+
+| Concern | Current evidence / decision still needed |
+|---|---|
+| Hot-account throughput | Serializable retries and unique account sequences are implemented; benchmark target TPS and contention limits are not specified here. |
+| End-to-end lag | Outbox publishing and retries exist; define alert thresholds for pending age, failures and Reader projection lag. |
+| Disaster recovery | Define backup verification, WAL archiving/PITR, RPO, RTO and recovery exercises. |
+| Financial retention | Define immutable retention/archiving and access policy for entries and descriptions. |
+| Period close | Define closing windows, reconciliation evidence, corrections and post-close posting policy. |
+| Reader rebuild | Out of scope of the current Movements delivery; requires its own durable replay/snapshot strategy. |
 
 ### CQRS and downstream Reader
 
