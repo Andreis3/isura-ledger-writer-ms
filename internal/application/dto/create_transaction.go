@@ -17,12 +17,20 @@ import (
 type CreateTransactionInput struct {
 	IdempotencyKey  *string           `json:"idempotency_key"`
 	Entries         []EntryInput      `json:"entries,omitempty"`
+	Movements       []MovementInput   `json:"movements,omitempty"`
 	DebitAccountID  *string           `json:"debit_account_id"`
 	CreditAccountID *string           `json:"credit_account_id"`
 	Operation       *string           `json:"operation"`
 	Amount          *int64            `json:"amount"`
 	Currency        *string           `json:"currency"`
 	Metadata        map[string]string `json:"metadata,omitempty"`
+}
+
+// MovementInput describes a logical group by positions in the request entries.
+type MovementInput struct {
+	Type           string `json:"type"`
+	Description    string `json:"description"`
+	EntryPositions []int  `json:"entry_positions"`
 }
 
 // EntryInput is one ordered accounting posting requested by a client.
@@ -65,6 +73,13 @@ type canonicalEntriesTransactionInput struct {
 	Entries   []canonicalEntryInput    `json:"entries"`
 	Operation string                   `json:"operation"`
 	Metadata  []canonicalMetadataEntry `json:"metadata"`
+	Movements []canonicalMovementInput `json:"movements"`
+}
+
+type canonicalMovementInput struct {
+	Type           string `json:"type"`
+	Description    string `json:"description"`
+	EntryPositions []int  `json:"entry_positions"`
 }
 
 // Fingerprint returns the SHA-256 of the canonical business intent.
@@ -109,6 +124,7 @@ func (d CreateTransactionInput) Fingerprint() (string, error) {
 	canonical := canonicalEntriesTransactionInput{
 		Amount: util.Int64(d.Amount), Entries: entries,
 		Operation: util.String(d.Operation), Metadata: metadata,
+		Movements: canonicalMovements(d.Movements),
 	}
 	raw, err := json.Marshal(canonical)
 	if err != nil {
@@ -119,6 +135,9 @@ func (d CreateTransactionInput) Fingerprint() (string, error) {
 }
 
 func (d CreateTransactionInput) validateFormat() error {
+	if err := d.validateMovementPositions(); err != nil {
+		return err
+	}
 	if d.Entries == nil {
 		return nil
 	}
@@ -136,6 +155,39 @@ func (d CreateTransactionInput) validateFormat() error {
 		return fault.InvalidEntityError(errors.New("entries must not be empty"), map[string]any{
 			"entries": "must contain at least two entries",
 		})
+	}
+	return nil
+}
+
+func canonicalMovements(movements []MovementInput) []canonicalMovementInput {
+	result := make([]canonicalMovementInput, 0, len(movements))
+	for _, movement := range movements {
+		result = append(result, canonicalMovementInput{
+			Type: movement.Type, Description: movement.Description,
+			EntryPositions: append([]int(nil), movement.EntryPositions...),
+		})
+	}
+	return result
+}
+
+func (d CreateTransactionInput) validateMovementPositions() error {
+	if len(d.Movements) == 0 {
+		return nil
+	}
+	entries := d.normalizedEntries()
+	for _, movement := range d.Movements {
+		if len(movement.EntryPositions) == 0 {
+			return fault.InvalidEntityError(errors.New("movement must reference at least one entry"), map[string]any{
+				"movements": "each movement must reference at least one entry",
+			})
+		}
+		for _, position := range movement.EntryPositions {
+			if position < 0 || position >= len(entries) {
+				return fault.InvalidEntityError(errors.New("movement entry position is invalid"), map[string]any{
+					"movements": "entry position is outside the entries collection",
+				})
+			}
+		}
 	}
 	return nil
 }
@@ -215,6 +267,22 @@ func (d *CreateTransactionInput) CreateTransactionFacade() (*transaction.Transac
 		}
 		entries = append(entries, entry)
 	}
+	movements := make([]*transaction.Movement, 0, len(d.Movements))
+	for _, requested := range d.Movements {
+		movementEntries := make([]*transaction.Entry, 0, len(requested.EntryPositions))
+		for _, position := range requested.EntryPositions {
+			movementEntries = append(movementEntries, entries[position])
+		}
+		movement, err := transaction.NewMovementBuilder().WithID().
+			WithType(requested.Type).
+			WithDescription(requested.Description).
+			WithEntries(movementEntries).
+			Build()
+		if err != nil {
+			return nil, err
+		}
+		movements = append(movements, movement)
+	}
 	amount, err := money.NewMoney(util.Int64(d.Amount), entries[0].Amount.Currency())
 	if err != nil {
 		return nil, err
@@ -229,6 +297,7 @@ func (d *CreateTransactionInput) CreateTransactionFacade() (*transaction.Transac
 		WithFingerprint(fingerprint).
 		WithMetadata(d.Metadata).
 		WithEntries(entries).
+		WithMovements(movements).
 		WithCreatedAt().
 		WithUpdatedAt().
 		Build()

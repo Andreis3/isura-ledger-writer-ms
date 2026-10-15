@@ -115,6 +115,43 @@ var _ = Describe("CreateTransactionInput", func() {
 var _ = Describe("INTERNAL :: APPLICATION :: DTO :: CREATE TRANSACTION", func() {
 	Describe("#Fingerprint", func() {
 		Context("success cases", func() {
+			It("should include movement type, description, and entry positions in the fingerprint", func() {
+				base := multiEntryInput()
+				base.Movements = []dto.MovementInput{{Type: "TRANSFER", Description: "main transfer", EntryPositions: []int{0, 1}}}
+				original, err := base.Fingerprint()
+				Expect(err).NotTo(HaveOccurred())
+
+				typeChanged := base
+				typeChanged.Movements = []dto.MovementInput{{Type: "REVERSAL", Description: "main transfer", EntryPositions: []int{0, 1}}}
+				descriptionChanged := base
+				descriptionChanged.Movements = []dto.MovementInput{{Type: "TRANSFER", Description: "other transfer", EntryPositions: []int{0, 1}}}
+				positionsChanged := base
+				positionsChanged.Movements = []dto.MovementInput{{Type: "TRANSFER", Description: "main transfer", EntryPositions: []int{1, 0}}}
+
+				for _, changed := range []dto.CreateTransactionInput{typeChanged, descriptionChanged, positionsChanged} {
+					fingerprint, fingerprintErr := changed.Fingerprint()
+					Expect(fingerprintErr).NotTo(HaveOccurred())
+					Expect(fingerprint).NotTo(Equal(original))
+				}
+			})
+
+			It("should preserve movement and referenced entry order in the fingerprint", func() {
+				first := multiEntryInput()
+				first.Movements = []dto.MovementInput{
+					{Type: "TRANSFER", Description: "first", EntryPositions: []int{0}},
+					{Type: "TRANSFER", Description: "second", EntryPositions: []int{1}},
+				}
+				second := first
+				second.Movements = append([]dto.MovementInput(nil), first.Movements...)
+				second.Movements[0], second.Movements[1] = second.Movements[1], second.Movements[0]
+
+				firstFingerprint, err := first.Fingerprint()
+				Expect(err).NotTo(HaveOccurred())
+				secondFingerprint, err := second.Fingerprint()
+				Expect(err).NotTo(HaveOccurred())
+				Expect(secondFingerprint).NotTo(Equal(firstFingerprint))
+			})
+
 			It("should create the same fingerprint for identical ordered entries", func() {
 				input := multiEntryInput()
 				first, err := input.Fingerprint()
@@ -188,6 +225,34 @@ var _ = Describe("INTERNAL :: APPLICATION :: DTO :: CREATE TRANSACTION", func() 
 
 	Describe("#CreateTransactionFacade", func() {
 		Context("success cases", func() {
+			It("should resolve movement positions to the corresponding transaction entries", func() {
+				input := multiEntryInput()
+				input.IdempotencyKey = stringPointer("movement-dto-1")
+				input.Movements = []dto.MovementInput{{Type: "TRANSFER", Description: "main transfer", EntryPositions: []int{1, 0}}}
+
+				entity, err := input.CreateTransactionFacade()
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(entity.Movements).To(HaveLen(1))
+				Expect(entity.Movements[0].Type).To(Equal("TRANSFER"))
+				Expect(entity.Movements[0].Description).To(Equal("main transfer"))
+				Expect(entity.Movements[0].Entries).To(HaveLen(2))
+				Expect(entity.Movements[0].Entries[0]).To(BeIdenticalTo(entity.Entries[1]))
+				Expect(entity.Movements[0].Entries[1]).To(BeIdenticalTo(entity.Entries[0]))
+			})
+		})
+
+		Context("error cases", func() {
+			It("should reject movement positions outside the entries collection without echoing the description", func() {
+				input := multiEntryInput()
+				input.Movements = []dto.MovementInput{{Type: "TRANSFER", Description: "sensitive description", EntryPositions: []int{2}}}
+
+				entity, err := input.CreateTransactionFacade()
+
+				Expect(entity).To(BeNil())
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).NotTo(ContainSubstring("sensitive description"))
+			})
 			It("should build every requested entry in input order", func() {
 				input := multiEntryInput()
 				input.IdempotencyKey = stringPointer("multi-1")
