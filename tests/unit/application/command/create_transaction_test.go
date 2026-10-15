@@ -31,6 +31,60 @@ const (
 )
 
 var _ = Describe("CreateTransaction", func() {
+	Context("movement persistence and idempotency", func() {
+		It("persists movement references to the assigned entries", func() {
+			input := inputWithMovement()
+			transactions := &transactionRepository{}
+			outboxes := &outboxRepository{}
+			sut := newCommand(newAccountRepository(), transactions, outboxes, &unitOfWork{})
+
+			result, err := sut.Execute(context.Background(), input)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.IdempotentReplay).To(BeFalse())
+			Expect(transactions.saved.Movements).To(HaveLen(1))
+			movement := transactions.saved.Movements[0]
+			Expect(movement.Entries).To(HaveLen(2))
+			Expect(movement.Entries[0]).To(BeIdenticalTo(transactions.saved.Entries[0]))
+			Expect(movement.Entries[1]).To(BeIdenticalTo(transactions.saved.Entries[1]))
+			Expect(outboxes.saved).NotTo(BeNil())
+		})
+
+		It("replays an equivalent request with the same movement without saving again", func() {
+			input := inputWithMovement()
+			persisted, err := input.CreateTransactionFacade()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(persisted.Complete()).To(Succeed())
+			transactions := &transactionRepository{existing: persisted}
+			sut := newCommand(newAccountRepository(), transactions, &outboxRepository{}, &unitOfWork{})
+
+			result, err := sut.Execute(context.Background(), input)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.IdempotentReplay).To(BeTrue())
+			Expect(result.TransactionID).To(Equal(new(persisted.ID.String())))
+			Expect(transactions.saveCalls).To(BeZero())
+		})
+
+		It("rejects a concurrent replay when the movement differs", func() {
+			input := inputWithMovement()
+			persisted, err := input.CreateTransactionFacade()
+			Expect(err).NotTo(HaveOccurred())
+			input.Movements[0].Description = "changed movement"
+			transactions := &transactionRepository{
+				saveErrors:     []error{&pgconn.PgError{Code: "23505", ConstraintName: "idx_transactions_idempotency_key"}},
+				existingOnSave: persisted,
+			}
+			sut := newCommand(newAccountRepository(), transactions, &outboxRepository{}, &unitOfWork{})
+
+			result, err := sut.Execute(context.Background(), input)
+
+			Expect(result).To(BeNil())
+			Expect(err).To(MatchError(ContainSubstring("idempotency fingerprint mismatch")))
+			Expect(transactions.saveCalls).To(Equal(1))
+		})
+	})
+
 	It("creates a completed transfer and its outbox event atomically", func() {
 		input := validInput()
 		accounts := newAccountRepository()
@@ -323,6 +377,19 @@ func validInput() dto.CreateTransactionInput {
 		Operation:       &operation,
 		Metadata:        map[string]string{"source": "unit-test"},
 	}
+}
+
+func inputWithMovement() dto.CreateTransactionInput {
+	input := validInput()
+	input.DebitAccountID = nil
+	input.CreditAccountID = nil
+	input.Currency = nil
+	input.Entries = []dto.EntryInput{
+		{AccountID: debitExternalID, Direction: string(transaction.Debit), Amount: 150000, Currency: string(money.BRL)},
+		{AccountID: creditExternalID, Direction: string(transaction.Credit), Amount: 150000, Currency: string(money.BRL)},
+	}
+	input.Movements = []dto.MovementInput{{Type: "TRANSFER", Description: "principal transfer", EntryPositions: []int{0, 1}}}
+	return input
 }
 
 type unitOfWork struct{}

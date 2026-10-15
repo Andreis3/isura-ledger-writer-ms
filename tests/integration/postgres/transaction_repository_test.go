@@ -255,12 +255,14 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: TRANSACTION REPOSITORY", f
 			operation := string(transaction.OperationTransfer)
 			newInput := func() dto.CreateTransactionInput {
 				return dto.CreateTransactionInput{
-					IdempotencyKey:  &key,
-					DebitAccountID:  &debitExternalID,
-					CreditAccountID: &creditExternalID,
-					Amount:          &amount,
-					Currency:        &currency,
-					Operation:       &operation,
+					IdempotencyKey: &key,
+					Entries: []dto.EntryInput{
+						{AccountID: debitExternalID, Direction: string(transaction.Debit), Amount: amount, Currency: currency},
+						{AccountID: creditExternalID, Direction: string(transaction.Credit), Amount: amount, Currency: currency},
+					},
+					Movements: []dto.MovementInput{{Type: "TRANSFER", Description: "concurrent transfer", EntryPositions: []int{0, 1}}},
+					Amount:    &amount,
+					Operation: &operation,
 				}
 			}
 
@@ -305,13 +307,21 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: TRANSACTION REPOSITORY", f
 			}
 			Expect(replays).To(Equal(1))
 
+			conflictingInput := newInput()
+			conflictingInput.Movements[0].Description = "different movement"
+			conflictResult, err := createTransaction.Execute(ctx, conflictingInput)
+			Expect(conflictResult).To(BeNil())
+			Expect(errors.Is(err, fault.ErrIdempotencyConflict)).To(BeTrue())
+
 			var count int
 			Expect(pool.QueryRow(ctx, "SELECT count(*) FROM transactions WHERE idempotency_key = $1", key).Scan(&count)).To(Succeed())
 			Expect(count).To(Equal(1))
-			var entries, outboxes int
+			var entries, movements, outboxes int
 			Expect(pool.QueryRow(ctx, "SELECT count(*) FROM entries WHERE transaction_id = $1", transactionID).Scan(&entries)).To(Succeed())
+			Expect(pool.QueryRow(ctx, "SELECT count(*) FROM movements WHERE transaction_id = $1", transactionID).Scan(&movements)).To(Succeed())
 			Expect(pool.QueryRow(ctx, "SELECT count(*) FROM outbox_events WHERE aggregate_id = $1", transactionID).Scan(&outboxes)).To(Succeed())
 			Expect(entries).To(Equal(2))
+			Expect(movements).To(Equal(1))
 			Expect(outboxes).To(Equal(1))
 		})
 		It("should create, replay, and reject conflicting multi-entry intents atomically", func() {
