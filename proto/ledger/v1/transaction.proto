@@ -15,6 +15,13 @@ message CreateTransactionRequest {
   string operation = 6;
   map<string, string> metadata = 7;
   repeated EntryRequest entries = 8;
+  repeated MovementRequest movements = 9;
+}
+
+message MovementRequest {
+  string type = 1;
+  string description = 2;
+  repeated int32 entry_positions = 3;
 }
 
 message EntryRequest {

@@ -104,6 +104,25 @@ var _ = Describe("INTERNAL :: TRANSPORT :: REST :: API", func() {
 				Expect(useCase.input.Entries[1].AccountID).To(Equal("account-b"))
 			})
 
+			It("should map movement descriptions and zero-based entry positions", func() {
+				// Arrange
+				useCase := &createTransactionAPIFake{output: &dto.CreateTransactionOutput{Status: "COMPLETED"}}
+				sut := handler.NewCreateTransactionHandler(useCase, adapter.SilentLoggerMock{}, adapter.SilentTracerMock{})
+				body := `{"amount":100,"operation":"TRANSFER","entries":[{"account_id":"account-a","direction":"DEBIT","amount":100,"currency":"BRL"},{"account_id":"account-b","direction":"CREDIT","amount":100,"currency":"BRL"}],"movements":[{"type":"TRANSFER","description":"main transfer","entry_positions":[0,1]}]}`
+				request := httptest.NewRequest(http.MethodPost, "/transactions", strings.NewReader(body))
+				response := httptest.NewRecorder()
+
+				// Act
+				sut.Handle(response, request)
+
+				// Assert
+				Expect(response.Code).To(Equal(http.StatusCreated))
+				Expect(useCase.input.Movements).To(HaveLen(1))
+				Expect(useCase.input.Movements[0]).To(Equal(dto.MovementInput{
+					Type: "TRANSFER", Description: "main transfer", EntryPositions: []int{0, 1},
+				}))
+			})
+
 			It("should accept the idempotency header and return HTTP 201", func() {
 				// Arrange
 				transactionID := "transaction-123"
