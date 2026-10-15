@@ -203,13 +203,41 @@ Each `Entry` stores its **own immutable `running_balance`** and `sequence_number
 
 This approach allows deterministic per-account reconstruction and efficient latest-balance lookups, at the cost of write-side sequencing and contention for **hot accounts** (for example a shared settlement account). Distinct transactions can contend even without balance-row updates because they compete for the next account sequence and serializable validation.
 
-The Unit of Work uses PostgreSQL `SERIALIZABLE` transactions. The write path obtains the latest ledger state and assigns a new per-account sequence; `UNIQUE(account_id, sequence_number)` provides a final conflict guard. Supported serialization/concurrency conflicts are retried with bounded exponential backoff and jitter (default maximum **5 attempts**). After the default five retry attempts are exhausted, the Unit of Work returns a **transaction conflict** (wrapping `ErrMaxRetriesExceeded`); it does not enqueue the unsuccessful financial write in the Outbox. Callers may retry the same business request using the **same idempotency key and identical payload**, respecting backoff; a different payload with that key is a conflict. In ambiguous-commit situations the application checks by idempotency key, but if that check cannot establish the result it returns an uncertain outcome rather than claiming a rollback. Under sustained contention, such failures should be monitored. A balance cache or checkpoint is an architectural alternative, **not** the source of truth in the current normal write path.
+The Unit of Work uses PostgreSQL `SERIALIZABLE` transactions. `TransactionRepository.FindLatestLedgerState` reads each account's last persisted `sequence_number` and `running_balance` with `ORDER BY sequence_number DESC LIMIT 1`. `AssignLedgerEntries` applies the requested entries **in input order**, incrementing the per-account sequence and computing each new running balance in memory before insert. This is **not** a PostgreSQL sequence, an in-memory global counter, or a balance-row `UPDATE`. Accounts touched by the transaction are collected in a stable sorted order for state lookup. `UNIQUE(account_id, sequence_number)` provides the database conflict guard. Supported serialization/concurrency conflicts are retried with bounded exponential backoff and jitter (default maximum **5 attempts**). After the default five retry attempts are exhausted, the Unit of Work returns a **transaction conflict** (wrapping `ErrMaxRetriesExceeded`); it does not enqueue the unsuccessful financial write in the Outbox. Callers may retry the same business request using the **same idempotency key and identical payload**, respecting backoff; a different payload with that key is a conflict. In ambiguous-commit situations the application checks by idempotency key, but if that check cannot establish the result it returns an uncertain outcome rather than claiming a rollback. Under sustained contention, such failures should be monitored. A balance cache or checkpoint is an architectural alternative, **not** the source of truth in the current normal write path.
 
 ### Outbox delivery semantics
 
 The current implementation is a **polling relay**, not Debezium/CDC. It claims pending/failed Outbox records in PostgreSQL, publishes batches using bounded concurrent workers to NATS JetStream, and records the publish result. Each message uses the outbox identifier as `Nats-Msg-Id` for broker-side deduplication.
 
 The delivery contract is **at least once**, not end-to-end exactly once. A relay can publish successfully and lose the acknowledgment or fail before recording `SUCCESS` in PostgreSQL; a later retry can therefore redeliver. JetStream deduplication is bounded by its configured duplicate window. Consumers (including the future Java Reader) must deduplicate using stable `event_id` values and apply projections idempotently. Consumers projecting per-account balances must also handle event reordering or gaps using entry `sequence_number`. An Outbox row or a JetStream stream is **not** an indefinite event archive by default.
+
+### Dead-letter publication and retry exhaustion
+
+The Outbox relay **does implement a dead-letter publish attempt**. If a publish failure reaches `NATS_RELAY_MAX_ATTEMPTS`, it tries publishing the original payload to the configured `DLQSubject`; when that is empty, the subject falls back to the event type plus the defined DLQ suffix. The dead-letter message uses `Nats-Msg-Id: <outbox-id>.dlq` for deduplication.
+
+The original PostgreSQL Outbox record remains in `FAILED` state; `ClaimPending` selects only records with `attempts < maxAttempts`, so exhaustion stops normal automatic retries. **DLQ delivery is not guaranteed by this code path**: the broker or configured stream may be unavailable, and a DLQ publish failure is logged. This relay does not itself demonstrate a DLQ consumer, automatic redrive or guaranteed DLQ stream provisioning. Operators should inspect the failed Outbox records and subject/stream configuration before any controlled redrive.
+
+### Observability signals
+
+The following are **actual OpenTelemetry instrument names** defined in `internal/infra/observability/prometheus.go` and exported through the configured Prometheus integration. Metric exporters may normalize names or units; confirm the resulting series in `/metrics` before writing PromQL or production alerts.
+
+| Instrument | Type | Labels | Use |
+|---|---|---|---|
+| `ledger_concurrency_retries_total` | Counter | none | Retry pressure from serialization/concurrency conflicts |
+| `ledger_idempotency_total` | Counter | `result` | New, replay and conflict outcomes |
+| `ledger_outbox_total` | Counter | `status`, `event_type` | Successful or failed Outbox publication attempts |
+| `ledger_command_total` | Counter | `command`, `state` | Use-case / relay execution outcomes |
+| `ledger_command_duration_milliseconds` | Histogram | `command` | Command latency distributions |
+| `ledger_db_query_duration_milliseconds` | Histogram | `database`, `table`, `method` | Database operation latencies |
+| `ledger_grpc_request_duration_milliseconds` | Histogram | `router`, `status_code`, `protocol` | Instrumented request latency |
+| `ledger_requests_total` | Counter | `router`, `status_code`, `protocol` | Traffic and response errors |
+| `ledger_transactions_total` | Counter | `status` | Transaction state totals |
+
+**Not currently evidenced as dedicated instruments:** Outbox pending age, Reader projection lag, and per-hot-account throughput. These require additional instrumentation and operational targets before they can support meaningful alerts. Never publish account identifiers as high-cardinality metric labels.
+
+### Performance validation
+
+No production throughput, p99 latency or hot-account TPS objective has been approved in this README. `make chaos-tests` validates failure and recovery scenarios; **it is not a capacity benchmark**. For a reproducible baseline, record the tested revision, hardware, Go/PostgreSQL versions, connection pool, account distribution (independent versus highly contended settlement account), client concurrency, duration, successes/conflicts and p50/p95/p99 latency. Publish numbers only after running that workload and keep development results distinct from production SLOs.
 
 ### Currency scope and financial controls
 
@@ -230,7 +258,7 @@ The command opens a **read-only REPEATABLE READ transaction** with a five-minute
 | PostgreSQL unavailable before or during a write | The command fails; an uncommitted UoW cannot create a partial transaction/movement/entry/Outbox set. | Restore database connectivity; retry with the **same** idempotency key. |
 | Commit response lost / commit outcome ambiguous | The command attempts a bounded lookup by idempotency key and fingerprint; if inconclusive it reports an uncertain outcome rather than assuming failure. | Check the persisted transaction before retrying; use the original key/payload, never a fresh key for the same business action. |
 | Hot-account conflict / serialization retry exhaustion | Serializable transaction is retried with backoff, then returns a transaction-conflict error after the bounded budget; no Outbox item is committed for a rejected attempt. | Back off and retry the same request/key; investigate account contention and retry metrics if persistent. |
-| NATS JetStream unavailable after DB commit | Financial data and Outbox record remain committed; the relay records a failed publish attempt when possible. | Restore NATS; inspect Outbox failures and retry policy; inspect the DLQ when configured and maximum publish attempts are reached. |
+| NATS JetStream unavailable after DB commit | Financial data and Outbox record remain committed; the relay records a failed publish attempt when possible. | Restore NATS; inspect Outbox failures/retry counts. At the attempt limit the relay **attempts** a DLQ publish; verify whether the subject/stream accepted it before controlled redrive. |
 | Relay stops after broker publish but before DB success update | JetStream may already hold the event while Outbox still requires another attempt. | Restart/retry relay; consumers must deduplicate on stable `event_id` because delivery is at least once. |
 | Reader receives a duplicate or out-of-order event | The Writer's committed ledger remains authoritative; projection correctness is the consumer's responsibility. | Reader deduplicates, detects gaps per account via `sequence_number`, and only advances a projection when prerequisites are satisfied. |
 | Reconciliation finds a mismatch or internal sequence gap | Read-only audit reports the inconsistency or fails validation; no automatic correction occurs. | Investigate and preserve evidence; use a separately approved recovery/correction procedure. |
@@ -467,6 +495,29 @@ A simple transfer using `debit_account_id` and `credit_account_id` also requires
 
 After commit, the Outbox relay publishes the `TransactionCreated` JSON payload to NATS JetStream. The current producer sets `event_version: 1`. Its `entries` include `entry_id`, `position`, `account_id`, `sequence_number`, `direction`, `amount`, `currency`, `running_balance`, and `movement_id`. Each `movements` item contains `movement_id`, `type`, `description`, and `entry_ids`.
 
+A minimal **illustrative** `TransactionCreated` event with one balanced movement looks like this (the producer may also include `idempotency_key`, optional metadata, account aliases and `status`; IDs below are placeholders):
+
+```json
+{
+  "event_version": 1,
+  "event_id": "outbox-event-id",
+  "transaction_id": "transaction-id",
+  "amount": 100000,
+  "currency": "BRL",
+  "status": "COMPLETED",
+  "occurred_at": "2026-10-15T12:00:00Z",
+  "entries": [
+    {"entry_id":"entry-1","position":0,"account_id":"account-A","sequence_number":42,"direction":"DEBIT","amount":100000,"currency":"BRL","running_balance":300000,"movement_id":"movement-1"},
+    {"entry_id":"entry-2","position":1,"account_id":"account-B","sequence_number":18,"direction":"CREDIT","amount":100000,"currency":"BRL","running_balance":800000,"movement_id":"movement-1"}
+  ],
+  "movements": [
+    {"movement_id":"movement-1","type":"TED_TRANSFER","description":"TED enviada","entry_ids":["entry-1","entry-2"]}
+  ]
+}
+```
+
+The payload uses integer minor units (cents for BRL). Each entry's sequence applies to its **own account**, so the two sequences need not match. The Reader should treat the persisted `entry_id`, `movement_id` and `event_id` as stable identifiers, not regenerate them.
+
 The event provides the association needed for the future Reader to produce statements. Downstream consumers must tolerate duplicate delivery and handle account ordering/gaps; event persistence in the Outbox does not by itself guarantee indefinite replay retention.
 
 ---
@@ -500,6 +551,25 @@ make integration-tests
 # all tests with race detector
 make chaos-tests
 ```
+
+---
+
+## Glossary
+
+| Term | Meaning in this service |
+|---|---|
+| Ledger | Authoritative accounting record of posted financial transactions |
+| Transaction | Atomic business/accounting envelope containing entries and movements |
+| Entry / posting | One immutable debit or credit against an accounting account |
+| Movement | Business-labeled, individually balanced grouping of entries within a transaction |
+| Statement description | The text captured with a movement for a future bank statement projection |
+| Running balance | Account balance immediately after a particular entry, stored on that entry |
+| Sequence number | Per-account posting order, computed from the last persisted ledger state |
+| Reconciliation | Read-only replay/audit comparing computed and recorded running balances |
+| Period close | Accounting control that restricts/certifies postings within a period; **not implemented here** |
+| Idempotency fingerprint | Hash of canonical business request content used to distinguish safe replay from key reuse with different intent |
+| Transactional Outbox | Database record of publication intent committed atomically with ledger data |
+| DLQ (dead-letter queue) | A configured JetStream destination used for attempted publication of exhausted Outbox events; not a guarantee of automatic recovery |
 
 ---
 
