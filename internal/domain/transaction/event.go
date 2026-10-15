@@ -5,26 +5,40 @@ import (
 )
 
 type TransactionCreated struct {
-	EventID         string                    `json:"event_id"`
-	TransactionID   string                    `json:"transaction_id"`
-	IdempotencyKey  string                    `json:"idempotency_key"`
-	DebitAccountID  string                    `json:"debit_account_id,omitempty"`
-	CreditAccountID string                    `json:"credit_account_id,omitempty"`
-	Amount          int64                     `json:"amount"`
-	Currency        string                    `json:"currency"`
-	Status          string                    `json:"status"`
-	OccurredAt      time.Time                 `json:"occurred_at"`
-	Metadata        map[string]string         `json:"metadata,omitempty"`
-	Entries         []TransactionEntryCreated `json:"entries"`
+	EventVersion    int                          `json:"event_version,omitempty"`
+	EventID         string                       `json:"event_id"`
+	TransactionID   string                       `json:"transaction_id"`
+	IdempotencyKey  string                       `json:"idempotency_key"`
+	DebitAccountID  string                       `json:"debit_account_id,omitempty"`
+	CreditAccountID string                       `json:"credit_account_id,omitempty"`
+	Amount          int64                        `json:"amount"`
+	Currency        string                       `json:"currency"`
+	Status          string                       `json:"status"`
+	OccurredAt      time.Time                    `json:"occurred_at"`
+	Metadata        map[string]string            `json:"metadata,omitempty"`
+	Entries         []TransactionEntryCreated    `json:"entries"`
+	Movements       []TransactionMovementCreated `json:"movements"`
 }
 
 // TransactionEntryCreated is one ordered posting included in a created transaction event.
 type TransactionEntryCreated struct {
-	Position  int64     `json:"position"`
-	AccountID string    `json:"account_id"`
-	Direction Direction `json:"direction"`
-	Amount    int64     `json:"amount"`
-	Currency  string    `json:"currency"`
+	EntryID        string    `json:"entry_id"`
+	Position       int64     `json:"position"`
+	AccountID      string    `json:"account_id"`
+	SequenceNumber int64     `json:"sequence_number"`
+	Direction      Direction `json:"direction"`
+	Amount         int64     `json:"amount"`
+	Currency       string    `json:"currency"`
+	RunningBalance int64     `json:"running_balance"`
+	MovementID     string    `json:"movement_id"`
+}
+
+// TransactionMovementCreated describes the entries grouped by one movement.
+type TransactionMovementCreated struct {
+	MovementID  string   `json:"movement_id"`
+	Type        string   `json:"type"`
+	Description string   `json:"description"`
+	EntryIDs    []string `json:"entry_ids"`
 }
 
 func NewTransactionCreated() *TransactionCreated {
@@ -91,6 +105,7 @@ func (t *TransactionCreated) WithEntries(entries []TransactionEntryCreated) *Tra
 
 func (t *TransactionCreated) Build() *TransactionCreated {
 	return &TransactionCreated{
+		EventVersion:    t.EventVersion,
 		EventID:         t.EventID,
 		TransactionID:   t.TransactionID,
 		IdempotencyKey:  t.IdempotencyKey,
@@ -102,22 +117,38 @@ func (t *TransactionCreated) Build() *TransactionCreated {
 		OccurredAt:      t.OccurredAt,
 		Metadata:        cloneMetadata(t.Metadata),
 		Entries:         append([]TransactionEntryCreated(nil), t.Entries...),
+		Movements:       cloneCreatedMovements(t.Movements),
 	}
 }
 
 func TransactionCreatedFacade(entityTransaction Transaction, idempotencyKey string, debitAccountID string, creditAccountID string) *TransactionCreated {
 	entries := make([]TransactionEntryCreated, 0, len(entityTransaction.Entries))
+	entryMovementIDs := make(map[string]string, len(entityTransaction.Entries))
+	movements := make([]TransactionMovementCreated, 0, len(entityTransaction.Movements))
+	for _, movement := range entityTransaction.Movements {
+		entryIDs := make([]string, 0, len(movement.Entries))
+		for _, entry := range movement.Entries {
+			entryID := entry.ID.String()
+			entryIDs = append(entryIDs, entryID)
+			entryMovementIDs[entryID] = movement.ID.String()
+		}
+		movements = append(movements, TransactionMovementCreated{
+			MovementID: movement.ID.String(), Type: movement.Type,
+			Description: movement.Description, EntryIDs: entryIDs,
+		})
+	}
 	for _, entry := range entityTransaction.Entries {
 		entries = append(entries, TransactionEntryCreated{
-			Position:  entry.TransactionPosition,
-			AccountID: entry.AccountID,
-			Direction: entry.Direction,
-			Amount:    entry.Amount.Amount(),
-			Currency:  string(entry.Amount.Currency()),
+			EntryID: entry.ID.String(), Position: entry.TransactionPosition,
+			AccountID: entry.AccountID, SequenceNumber: entry.SequenceNumber,
+			Direction: entry.Direction, Amount: entry.Amount.Amount(),
+			Currency: string(entry.Amount.Currency()), RunningBalance: entry.RunningBalance,
+			MovementID: entryMovementIDs[entry.ID.String()],
 		})
 	}
 
 	return NewTransactionCreated().
+		WithEventVersion(1).
 		WithTransactionID(entityTransaction.ID.String()).
 		WithIdempotencyKey(idempotencyKey).
 		WithDebitAccountID(debitAccountID).
@@ -128,5 +159,27 @@ func TransactionCreatedFacade(entityTransaction Transaction, idempotencyKey stri
 		WithOccurredAt(time.Now()).
 		WithMetadata(entityTransaction.Metadata).
 		WithEntries(entries).
+		WithMovements(movements).
 		Build()
+}
+
+// WithEventVersion sets the payload schema version.
+func (t *TransactionCreated) WithEventVersion(version int) *TransactionCreated {
+	t.EventVersion = version
+	return t
+}
+
+// WithMovements stores a copy of the movement snapshot.
+func (t *TransactionCreated) WithMovements(movements []TransactionMovementCreated) *TransactionCreated {
+	t.Movements = cloneCreatedMovements(movements)
+	return t
+}
+
+func cloneCreatedMovements(movements []TransactionMovementCreated) []TransactionMovementCreated {
+	cloned := make([]TransactionMovementCreated, len(movements))
+	for index, movement := range movements {
+		cloned[index] = movement
+		cloned[index].EntryIDs = append([]string(nil), movement.EntryIDs...)
+	}
+	return cloned
 }

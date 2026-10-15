@@ -108,16 +108,16 @@ var _ = Describe("CreateTransaction", func() {
 		var event transaction.TransactionCreated
 		Expect(json.Unmarshal(outboxes.saved.Payload, &event)).To(Succeed())
 		Expect(event.EventID).NotTo(BeEmpty())
+		Expect(event.EventVersion).To(Equal(1))
 		Expect(event.Status).To(Equal(string(transaction.Completed)))
 		Expect(event.Metadata).To(Equal(input.Metadata))
 		Expect(event.Entries).To(HaveLen(len(transactions.saved.Entries)))
 		for position, entry := range transactions.saved.Entries {
 			Expect(event.Entries[position]).To(Equal(transaction.TransactionEntryCreated{
-				Position:  int64(position),
-				AccountID: entry.AccountID,
-				Direction: entry.Direction,
-				Amount:    entry.Amount.Amount(),
-				Currency:  string(entry.Amount.Currency()),
+				EntryID: entry.ID.String(), Position: int64(position), AccountID: entry.AccountID,
+				SequenceNumber: entry.SequenceNumber, Direction: entry.Direction,
+				Amount: entry.Amount.Amount(), Currency: string(entry.Amount.Currency()),
+				RunningBalance: entry.RunningBalance,
 			}))
 		}
 	})

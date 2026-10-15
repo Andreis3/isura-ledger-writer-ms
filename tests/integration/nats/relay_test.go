@@ -26,6 +26,40 @@ const relaySubject = "ledger.transaction.created"
 var _ = Describe("INTEGRATION :: INFRA :: NATS :: OUTBOX RELAY", func() {
 	Describe("#Run", func() {
 		Context("success cases", func() {
+			It("should deduplicate a versioned transaction snapshot using the stable outbox event ID", func() {
+				// Arrange (Given)
+				ctx := context.Background()
+				container, js, closeJetStream, err := startJetStream(ctx)
+				Expect(err).NotTo(HaveOccurred())
+				DeferCleanup(func() { Expect(testcontainers.TerminateContainer(container)).To(Succeed()) })
+				DeferCleanup(closeJetStream)
+				payload := []byte(`{"event_version":1,"event_id":"stable-event-id","transaction_id":"transaction-id","entries":[{"entry_id":"entry-id","account_id":"account-id","position":0,"sequence_number":3,"direction":"DEBIT","amount":100,"currency":"BRL","running_balance":900,"movement_id":"movement-id"}],"movements":[{"movement_id":"movement-id","type":"TRANSFER","description":"transfer","entry_ids":["entry-id"]}]}`)
+				item, err := outbox.NewOutbox("transaction-id", payload)
+				Expect(err).NotTo(HaveOccurred())
+				item.ID, err = entity.NewID("0195f1a0-0000-7000-8000-000000000001")
+				Expect(err).NotTo(HaveOccurred())
+				relay := newIntegrationRelay(&integrationRepository{items: []*outbox.Outbox{item}}, js)
+
+				// Act (When)
+				Expect(relay.PublishBatch(ctx)).To(Succeed())
+				Expect(relay.PublishBatch(ctx)).To(Succeed())
+				stream, err := js.Stream(ctx, relayStreamName())
+				Expect(err).NotTo(HaveOccurred())
+				info, err := stream.Info(ctx)
+				Expect(err).NotTo(HaveOccurred())
+
+				// Assert (Then)
+				Expect(info.State.Msgs).To(Equal(uint64(1)))
+				consumer, err := js.CreateOrUpdateConsumer(ctx, relayStreamName(), jetstream.ConsumerConfig{
+					FilterSubject: relaySubject, AckPolicy: jetstream.AckExplicitPolicy,
+				})
+				Expect(err).NotTo(HaveOccurred())
+				message, err := consumer.Next(jetstream.FetchMaxWait(time.Second))
+				Expect(err).NotTo(HaveOccurred())
+				Expect(string(message.Data())).To(Equal(string(payload)))
+				Expect(message.Ack()).To(Succeed())
+			})
+
 			It("should publish a 100-entry transaction event within the JetStream payload limit", func() {
 				// Arrange (Given)
 				ctx := context.Background()
