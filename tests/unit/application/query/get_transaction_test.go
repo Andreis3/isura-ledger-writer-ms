@@ -1,11 +1,11 @@
 //go:build unit
 
-package command_test
+package query_test
 
 import (
 	"context"
 
-	"github.com/andreis3/isura-ledger-ms/internal/application/command"
+	"github.com/andreis3/isura-ledger-ms/internal/application/query"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/fault"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/transaction"
 	. "github.com/onsi/ginkgo/v2"
@@ -34,13 +34,13 @@ func (f *getTransactionRepositoryFake) ExistsByIdempotencyKey(context.Context, s
 
 var _ transaction.Repository = (*getTransactionRepositoryFake)(nil)
 
-var _ = Describe("INTERNAL :: APPLICATION :: COMMAND :: GET TRANSACTION", func() {
+var _ = Describe("INTERNAL :: APPLICATION :: QUERY :: GET TRANSACTION", func() {
 	Describe("#Execute", func() {
 		Context("success cases", func() {
 			It("should fetch the transaction with all entries", func() {
 				// Arrange
 				repository := &getTransactionRepositoryFake{}
-				sut := command.NewGetTransaction(repository)
+				sut := query.NewGetTransaction(repository)
 				id := "transaction-id"
 
 				// Act
@@ -59,7 +59,7 @@ var _ = Describe("INTERNAL :: APPLICATION :: COMMAND :: GET TRANSACTION", func()
 			It("should map a missing transaction to the public not found fault", func() {
 				// Arrange
 				repository := &getTransactionRepositoryFake{err: transaction.ErrTransactionNotFound}
-				sut := command.NewGetTransaction(repository)
+				sut := query.NewGetTransaction(repository)
 
 				// Act
 				_, err := sut.Execute(context.Background(), "missing")

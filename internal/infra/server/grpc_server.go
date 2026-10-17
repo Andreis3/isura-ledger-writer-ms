@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/andreis3/isura-ledger-ms/internal/application/command"
+	"github.com/andreis3/isura-ledger-ms/internal/application/query"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/dependency"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/postgres/uow"
 	"github.com/andreis3/isura-ledger-ms/internal/transport/grpc/handler"
@@ -93,7 +94,7 @@ func (s *GRPCServer) buildLedgerServer() *grpcTransport.LedgerServer {
 	// handlers
 	createAccountHandler := handler.NewCreateAccountHandler(createAccount, s.deps.Log, s.deps.Tracer)
 	createTransactionHandler := handler.NewCreateTransactionHandler(createTransaction, s.deps.Log, s.deps.Tracer)
-	getTransactionHandler := handler.NewGetTransactionHandler(command.NewGetTransaction(composer.BuildTransactionRepo()))
+	getTransactionHandler := handler.NewGetTransactionHandler(query.NewGetTransaction(composer.BuildTransactionRepo()))
 
 	// server
 	ledgerServer := grpcTransport.NewLedgerServer(createAccountHandler, createTransactionHandler, getTransactionHandler)

@@ -3,16 +3,16 @@ package handler
 import (
 	"context"
 
-	"github.com/andreis3/isura-ledger-ms/internal/application/command"
+	"github.com/andreis3/isura-ledger-ms/internal/application/query"
 	pb "github.com/andreis3/isura-ledger-ms/internal/transport/grpc/pb/ledger/v1"
 	"github.com/andreis3/isura-ledger-ms/internal/transport/grpc/translator"
 )
 
 type GetTransactionHandler struct {
-	useCase *command.GetTransaction
+	useCase *query.GetTransaction
 }
 
-func NewGetTransactionHandler(useCase *command.GetTransaction) *GetTransactionHandler {
+func NewGetTransactionHandler(useCase *query.GetTransaction) *GetTransactionHandler {
 	return &GetTransactionHandler{useCase: useCase}
 }
 

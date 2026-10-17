@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/andreis3/isura-ledger-ms/internal/application/command"
+	"github.com/andreis3/isura-ledger-ms/internal/application/query"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/account"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/event"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/money"
@@ -206,7 +207,7 @@ var _ = Describe("INTERNAL :: TRANSPORT :: GRPC :: HANDLER :: GET TRANSACTION", 
 					WithEntries([]*transaction.Entry{entry, credit}).
 					Build()
 				Expect(err).NotTo(HaveOccurred())
-				sut := grpcHandler.NewGetTransactionHandler(command.NewGetTransaction(&grpcTransactionRepositoryFake{value: transactionEntity}))
+				sut := grpcHandler.NewGetTransactionHandler(query.NewGetTransaction(&grpcTransactionRepositoryFake{value: transactionEntity}))
 
 				// Act.
 				response, err := sut.Handle(context.Background(), &pb.GetTransactionRequest{TransactionId: transactionEntity.ID.String()})
@@ -226,7 +227,7 @@ var _ = Describe("INTERNAL :: TRANSPORT :: GRPC :: HANDLER :: GET TRANSACTION", 
 			It("should translate repository failures to a gRPC status", func() {
 				// Arrange.
 				wantErr := errors.New("query failed")
-				sut := grpcHandler.NewGetTransactionHandler(command.NewGetTransaction(&grpcTransactionRepositoryFake{err: wantErr}))
+				sut := grpcHandler.NewGetTransactionHandler(query.NewGetTransaction(&grpcTransactionRepositoryFake{err: wantErr}))
 
 				// Act.
 				_, err := sut.Handle(context.Background(), &pb.GetTransactionRequest{TransactionId: "tx"})
