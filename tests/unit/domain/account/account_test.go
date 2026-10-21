@@ -72,6 +72,19 @@ var _ = Describe("INTERNAL :: DOMAIN :: ACCOUNT :: ACCOUNT", func() {
 		})
 	})
 
+	Describe("#WithHoldsEligible", func() {
+		Context("success cases", func() {
+			It("should keep hold eligibility disabled unless explicitly enabled", func() {
+				eligible, err := account.NewAccountBuilder().WithID().WithAccountExternalID("d589965c-1622-4329-98f9-f13354a2e4dc").WithAccountNumber("123456").WithBalancePolicy("BALANCE_NON_NEGATIVE").WithCurrency("BRL").WithHoldsEligible(true).Build()
+				Expect(err).NotTo(HaveOccurred())
+				Expect(eligible.HoldsEligible).To(BeTrue())
+				ineligible, err := account.NewAccountBuilder().WithID().WithAccountExternalID("d589965c-1622-4329-98f9-f13354a2e4dc").WithAccountNumber("123456").WithBalancePolicy("BALANCE_NON_NEGATIVE").WithCurrency("BRL").Build()
+				Expect(err).NotTo(HaveOccurred())
+				Expect(ineligible.HoldsEligible).To(BeFalse())
+			})
+		})
+	})
+
 	Describe("#ApplyEntry", func() {
 		It("applies debit and credit using the normal balance of each accounting type", func() {
 			amount, err := money.NewMoney(100, money.BRL)

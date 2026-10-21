@@ -63,6 +63,7 @@ type AccountBuilder struct {
 	status            Status
 	accountType       Type
 	balancePolicy     BalancePolicy
+	holdsEligible     bool
 	currency          money.Currency
 	createdAt         time.Time
 	updatedAt         time.Time
@@ -82,6 +83,7 @@ type Account struct {
 	Status            Status
 	AccountType       Type
 	BalancePolicy     BalancePolicy
+	HoldsEligible     bool
 	Currency          money.Currency
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
@@ -92,6 +94,12 @@ func (b *AccountBuilder) WithBalancePolicy(policy string) *AccountBuilder {
 	balancePolicy := BalancePolicy(policy)
 	b.eval.CheckField(balancePolicy.IsValid(), "balance_policy", "invalid balance policy")
 	b.balancePolicy = balancePolicy
+	return b
+}
+
+// WithHoldsEligible explicitly enables funds holds for the account.
+func (b *AccountBuilder) WithHoldsEligible(eligible bool) *AccountBuilder {
+	b.holdsEligible = eligible
 	return b
 }
 
@@ -220,6 +228,7 @@ func (b *AccountBuilder) Build() (*Account, error) {
 		Status:            b.status,
 		AccountType:       b.accountType,
 		BalancePolicy:     b.balancePolicy,
+		HoldsEligible:     b.holdsEligible,
 		Currency:          b.currency,
 		CreatedAt:         shared.CoalesceTime(b.createdAt, now),
 		UpdatedAt:         shared.CoalesceTime(b.updatedAt, now),

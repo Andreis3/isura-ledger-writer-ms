@@ -1,11 +1,136 @@
 package hold
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/andreis3/isura-ledger-ms/internal/domain/money"
 )
+
+// HoldStatus is the persisted lifecycle state of an instruction.
+type HoldStatus string
+
+const (
+	StatusAllocated          HoldStatus = "ALLOCATED"
+	StatusPartiallyAllocated HoldStatus = "PARTIALLY_ALLOCATED"
+	StatusPendingReview      HoldStatus = "PENDING_REVIEW"
+	StatusReleased           HoldStatus = "RELEASED"
+)
+
+var ErrInvalidRelease = errors.New("invalid hold release")
+
+// Instruction is the current persisted state of one idempotently identified hold.
+type Instruction struct {
+	ID, AccountID, Currency, Origin, Reference string
+	Type                                       HoldType
+	Requested, Allocated, Pending, Released    money.Money
+	Status                                     HoldStatus
+	PolicyVersion, RequestFingerprint          string
+}
+
+// Identity returns the idempotency identity shared by an origin and reference.
+func (i Instruction) Identity() string {
+	return strings.TrimSpace(i.Origin) + ":" + strings.TrimSpace(i.Reference)
+}
+
+// Fingerprint returns a stable digest of the immutable instruction content.
+func (i Instruction) Fingerprint() string {
+	content := strings.Join([]string{i.AccountID, i.Currency, strings.TrimSpace(i.Origin), strings.TrimSpace(i.Reference), string(i.Type), strconv.FormatInt(i.Requested.Amount(), 10)}, "\x00")
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(content)))
+}
+
+// Validate checks the persistable instruction invariants.
+func (i Instruction) Validate() error {
+	if i.ID == "" || i.AccountID == "" || strings.TrimSpace(i.Origin) == "" || strings.TrimSpace(i.Reference) == "" || i.Identity() == ":" {
+		return fmt.Errorf("%w: instruction identity fields are required", ErrInvalidHold)
+	}
+	if err := i.Type.Validate(); err != nil {
+		return err
+	}
+	if err := validateMoney(i.Requested, true); err != nil {
+		return fmt.Errorf("%w: requested amount: %w", ErrInvalidHold, err)
+	}
+	for name, value := range map[string]money.Money{"allocated": i.Allocated, "pending": i.Pending, "released": i.Released} {
+		if err := validateMoney(value, false); err != nil || value.Currency() != i.Requested.Currency() {
+			return fmt.Errorf("%w: invalid %s amount", ErrInvalidHold, name)
+		}
+	}
+	if i.Allocated.Amount() > i.Requested.Amount() || i.Pending.Amount() != i.Requested.Amount()-i.Allocated.Amount() || i.Released.Amount() > i.Allocated.Amount() {
+		return fmt.Errorf("%w: amount invariant violated", ErrInvalidHold)
+	}
+	switch i.Status {
+	case StatusAllocated:
+		if !i.Allocated.Equal(i.Requested) || i.Released.Equal(i.Allocated) {
+			return fmt.Errorf("%w: invalid allocated status", ErrInvalidHold)
+		}
+	case StatusPartiallyAllocated:
+		if !i.Allocated.IsPositive() || !i.Pending.IsPositive() || i.Released.Equal(i.Allocated) {
+			return fmt.Errorf("%w: invalid partially allocated status", ErrInvalidHold)
+		}
+	case StatusPendingReview:
+		if i.Allocated.IsPositive() {
+			return fmt.Errorf("%w: pending instruction cannot retain funds", ErrInvalidHold)
+		}
+	case StatusReleased:
+		if !i.Allocated.IsPositive() || !i.Released.Equal(i.Allocated) {
+			return fmt.Errorf("%w: invalid released status", ErrInvalidHold)
+		}
+	default:
+		return fmt.Errorf("%w: invalid status", ErrInvalidHold)
+	}
+	return nil
+}
+
+// ApplyDecision updates the instruction with a domain evaluation result.
+func (i *Instruction) ApplyDecision(decision HoldDecision) error {
+	if i == nil || decision.RequestID != i.ID || !decision.Requested.Equal(i.Requested) ||
+		!decision.Allocated.Currency().IsValid() || !decision.Pending.Currency().IsValid() ||
+		decision.Allocated.Currency() != i.Requested.Currency() || decision.Pending.Currency() != i.Requested.Currency() ||
+		decision.Allocated.IsNegative() || decision.Pending.IsNegative() ||
+		decision.Allocated.Amount() > i.Requested.Amount() || decision.Pending.Amount() != i.Requested.Amount()-decision.Allocated.Amount() {
+		return fmt.Errorf("%w: decision does not match instruction", ErrInvalidHold)
+	}
+	if decision.Status != Allocated && decision.Status != PartiallyAllocated && decision.Status != PendingReview {
+		return fmt.Errorf("%w: unknown decision status", ErrInvalidHold)
+	}
+	if i.Released.Amount() > decision.Allocated.Amount() {
+		return fmt.Errorf("%w: decision below released amount", ErrInvalidHold)
+	}
+	i.Allocated, i.Pending, i.PolicyVersion = decision.Allocated, decision.Pending, decision.PolicyVersion
+	switch decision.Status {
+	case Allocated, PartiallyAllocated:
+		i.Status = HoldStatus(decision.Status)
+	case PendingReview:
+		i.Status = StatusPendingReview
+	}
+	if i.Released.Equal(i.Allocated) && i.Allocated.IsPositive() {
+		i.Status = StatusReleased
+	}
+	return nil
+}
+
+// Release records an authorized partial or full release, bounded by retained funds.
+func (i *Instruction) Release(amount money.Money) error {
+	if i == nil || !amount.Currency().IsValid() || amount.Currency() != i.Allocated.Currency() || !amount.IsPositive() {
+		return fmt.Errorf("%w: amount must be positive and use the hold currency", ErrInvalidRelease)
+	}
+	remaining := i.Allocated.Amount() - i.Released.Amount()
+	if remaining < 0 || amount.Amount() > remaining {
+		return fmt.Errorf("%w: amount exceeds retained balance", ErrInvalidRelease)
+	}
+	released, err := i.Released.Add(amount)
+	if err != nil {
+		return fmt.Errorf("%w: add released amount: %w", ErrInvalidRelease, err)
+	}
+	i.Released = released
+	if i.Released.Equal(i.Allocated) {
+		i.Status = StatusReleased
+	}
+	return nil
+}
 
 var (
 	ErrInvalidHoldType = errors.New("invalid hold type")
