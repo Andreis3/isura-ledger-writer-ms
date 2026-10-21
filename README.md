@@ -19,7 +19,7 @@ This service is the financial source of truth: it stores immutable debit/credit 
 
 ## Architecture
 
-This service follows **Hexagonal Architecture** with **tactical Domain-Driven Design**, organized into `transaction`, `account`, and `outbox` modules inside the **Ledger bounded context**.
+This service follows **Hexagonal Architecture** with **tactical Domain-Driven Design**, organized into `transaction`, `account`, `hold`, and `outbox` modules inside the **Ledger bounded context**.
 
 ### Dependency rule
 
@@ -37,6 +37,7 @@ The service is organized by domain, application use cases, adapters and infrastr
 cmd/server/                         # Service bootstrap
 internal/domain/transaction/        # Transaction, Entry, Movement, domain events
 internal/domain/account/            # Accounting accounts and balance policy
+internal/domain/hold/               # Hold types, validation, allocation policy and snapshot evaluator
 internal/domain/outbox/             # Outbox domain model
 internal/application/command/       # CreateTransaction and other commands
 internal/application/dto/           # REST/application payload validation
@@ -128,6 +129,18 @@ Account {
   UpdatedAt      time.Time
 }
 ```
+
+### Funds holds — Domain snapshot
+
+`internal/domain/hold` models restrictions on the availability of funds separately from the account's status and accounting entries. It recognizes `JUDICIAL`, `REGULATORY`, `GUARANTEE`, `CONTRACTUAL`, and `OPERATIONAL` as declared hold types; these labels do not establish legal validity or authority.
+
+The package provides a pure evaluator for a caller-supplied snapshot: eligible funds, active allocations, new requests, and an explicitly versioned operational policy. It subtracts existing active allocations before evaluating requests and returns the requested, allocated, and pending amounts with a status, policy version, conflict IDs, and reason. It does not change account status, create a debit or transfer, persist a hold, or coordinate concurrent evaluations across snapshots.
+
+The caller must determine legal and business eligibility—including applicable guarantees and restrictions—before passing `EligibleFunds`. The evaluator treats that amount as numerically eligible; it does not perform the legal eligibility assessment.
+
+`Policy.TypeOrder` is an operational order, not a universal legal priority. A request whose type is absent from the configured order always receives `PENDING_REVIEW`, even when the numeric funds are sufficient; missing configuration is not authorization. Unresolved competition also goes to review rather than being broken by request ID or date. Duplicate request IDs and duplicate active allocation IDs make the snapshot invalid.
+
+`HoldDecision` is a returned value, not an immutable object: callers can modify its exported fields. The evaluator does not mutate inputs or previously returned decisions, and it creates independent conflict ID slices. Persisting decisions for a durable audit history is the responsibility of a later integration.
 
 ### OutboxEvent — Aggregate
 

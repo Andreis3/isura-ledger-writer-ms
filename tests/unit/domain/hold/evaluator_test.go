@@ -100,6 +100,19 @@ var _ = Describe("INTERNAL :: DOMAIN :: HOLD :: EVALUATOR", func() {
 				Expect(decisions[1].Reason).To(Equal("UNRESOLVED_TYPE_PRIORITY"))
 			})
 
+			It("should route an unconfigured type to review even when eligible funds are sufficient", func() {
+				input := evaluationInput(100, nil, []hold.HoldRequest{request("contractual", hold.Contractual, 80)}, validPolicy())
+
+				decisions, err := hold.Evaluate(input)
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(decisions).To(HaveLen(1))
+				Expect(decisions[0].Status).To(Equal(hold.PendingReview))
+				Expect(decisions[0].Allocated.Amount()).To(BeZero())
+				Expect(decisions[0].Pending.Amount()).To(Equal(int64(80)))
+				Expect(decisions[0].Reason).To(Equal("UNRESOLVED_TYPE_PRIORITY"))
+			})
+
 			It("should leave a request pending when partial allocation is disabled", func() {
 				policy := validPolicy()
 				policy.AllowPartial = false

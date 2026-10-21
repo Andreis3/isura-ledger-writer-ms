@@ -139,6 +139,10 @@ func evaluateWithUnorderedTypes(input HoldEvaluationInput, decisions []HoldDecis
 	}
 	if total <= available.Amount() {
 		for index, request := range input.Requests {
+			if !containsType(input.Policy.TypeOrder, request.Type) {
+				decisions[index] = newDecision(input, index, zeroMoney(available.Currency()), request.Requested, PendingReview, nil, reasonUnresolvedPriority)
+				continue
+			}
 			decisions[index] = newDecision(input, index, request.Requested, zeroMoney(available.Currency()), Allocated, nil, reasonAllocated)
 		}
 		return decisions, nil

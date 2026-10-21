@@ -127,6 +127,19 @@ var _ = Describe("INTERNAL :: DOMAIN :: HOLD :: HOLD", func() {
 				input = hold.HoldEvaluationInput{EligibleFunds: mustMoney(100, money.BRL), Policy: hold.AllocationPolicy{}}
 				Expect(input.Validate()).To(HaveOccurred())
 			})
+
+			It("should reject duplicate active allocation identifiers", func() {
+				allocation := hold.ActiveAllocation{HoldID: "old-1", Type: hold.Judicial, Allocated: mustMoney(10, money.BRL)}
+				input := hold.HoldEvaluationInput{
+					EligibleFunds:     mustMoney(100, money.BRL),
+					ActiveAllocations: []hold.ActiveAllocation{allocation, allocation},
+					Policy:            validPolicy(),
+				}
+
+				err := input.Validate()
+
+				Expect(err).To(MatchError(ContainSubstring("duplicate active allocation hold ID")))
+			})
 		})
 	})
 })

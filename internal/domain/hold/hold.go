@@ -81,8 +81,11 @@ func (a ActiveAllocation) Validate() error {
 	return nil
 }
 
-// HoldEvaluationInput is the immutable snapshot used for one allocation evaluation.
+// HoldEvaluationInput is the caller-supplied snapshot used for one allocation evaluation.
 type HoldEvaluationInput struct {
+	// EligibleFunds must already reflect the caller's eligibility assessment.
+	// Evaluation applies the operational allocation policy; it does not determine
+	// legal eligibility or account for guarantees and restrictions itself.
 	EligibleFunds     money.Money
 	ActiveAllocations []ActiveAllocation
 	Requests          []HoldRequest
@@ -109,13 +112,18 @@ func (in HoldEvaluationInput) Validate() error {
 		}
 		requestIDs[request.ID] = struct{}{}
 	}
+	allocationIDs := make(map[string]struct{}, len(in.ActiveAllocations))
 	for _, allocation := range in.ActiveAllocations {
 		if err := allocation.Validate(); err != nil {
 			return fmt.Errorf("%w: allocation %q: %w", ErrInvalidSnapshot, allocation.HoldID, err)
 		}
+		if _, exists := allocationIDs[allocation.HoldID]; exists {
+			return fmt.Errorf("%w: duplicate active allocation hold ID %q", ErrInvalidSnapshot, allocation.HoldID)
+		}
 		if allocation.Allocated.Currency() != in.EligibleFunds.Currency() {
 			return fmt.Errorf("%w: allocation %q currency differs from eligible funds", ErrInvalidSnapshot, allocation.HoldID)
 		}
+		allocationIDs[allocation.HoldID] = struct{}{}
 	}
 	return nil
 }
@@ -129,7 +137,9 @@ const (
 	PendingReview      HoldDecisionStatus = "PENDING_REVIEW"
 )
 
-// HoldDecision is the immutable result of one hold evaluation.
+// HoldDecision is the result value of one hold evaluation. Its exported fields
+// are mutable by the caller; Evaluate returns independently owned conflict ID
+// slices and never mutates previously returned decisions.
 type HoldDecision struct {
 	RequestID     string
 	PolicyVersion string
