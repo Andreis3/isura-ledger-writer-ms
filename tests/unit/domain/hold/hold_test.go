@@ -42,8 +42,8 @@ var _ = Describe("INTERNAL :: DOMAIN :: HOLD :: HOLD", func() {
 
 		Context("error cases", func() {
 			It("should reject missing identifiers, invalid types, zero amounts, and invalid currencies", func() {
-				valid, _ := money.NewMoney(100, money.BRL)
-				zero, _ := money.NewMoney(0, money.BRL)
+				valid := mustMoney(100, money.BRL)
+				zero := mustMoney(0, money.BRL)
 				invalidCurrency := money.Money{}
 				Expect((hold.HoldRequest{Type: hold.Judicial, Requested: valid}).Validate()).To(HaveOccurred())
 				Expect((hold.HoldRequest{ID: "req-2", Type: "OTHER", Requested: valid}).Validate()).To(HaveOccurred())
@@ -64,9 +64,9 @@ var _ = Describe("INTERNAL :: DOMAIN :: HOLD :: HOLD", func() {
 
 		Context("error cases", func() {
 			It("should reject missing identifiers, invalid types, and invalid money", func() {
-				valid, _ := money.NewMoney(10, money.BRL)
-				negative, _ := money.NewMoney(1, money.BRL)
-				negative, _ = negative.Subtract(mustMoney(2, money.BRL))
+				valid := mustMoney(10, money.BRL)
+				negative, err := mustMoney(1, money.BRL).Subtract(mustMoney(2, money.BRL))
+				Expect(err).NotTo(HaveOccurred())
 				Expect((hold.ActiveAllocation{Type: hold.Judicial, Allocated: valid}).Validate()).To(HaveOccurred())
 				Expect((hold.ActiveAllocation{HoldID: "hold-2", Type: "OTHER", Allocated: valid}).Validate()).To(HaveOccurred())
 				Expect((hold.ActiveAllocation{HoldID: "hold-3", Type: hold.Judicial, Allocated: negative}).Validate()).To(HaveOccurred())
