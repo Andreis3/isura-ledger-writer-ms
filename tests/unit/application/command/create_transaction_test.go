@@ -16,6 +16,7 @@ import (
 	"github.com/andreis3/isura-ledger-ms/internal/domain/account"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/entity"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/fault"
+	domainhold "github.com/andreis3/isura-ledger-ms/internal/domain/hold"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/money"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/outbox"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/transaction"
@@ -339,6 +340,75 @@ var _ = Describe("CreateTransaction", func() {
 
 var _ = Describe("INTERNAL :: APPLICATION :: COMMAND :: CREATE TRANSACTION", func() {
 	Describe("#Execute", func() {
+		Context("success cases", func() {
+			It("should allow an eligible outgoing entry when the remaining balance covers effective holds", func() {
+				accounts := newAccountRepository()
+				accounts.accounts[creditExternalID].HoldsEligible = true
+				transactions := &transactionRepository{ledgerStates: map[string]account.LedgerState{
+					accounts.accounts[creditExternalID].ID.String(): {RunningBalance: 250000},
+				}}
+				holds := &effectiveHoldsFake{values: []domainhold.Instruction{{Allocated: mustMoney(100000), Released: mustMoney(0)}}}
+				sut := newCommandWithHolds(accounts, transactions, &outboxRepository{}, holds)
+
+				result, err := sut.Execute(context.Background(), validInput())
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result).NotTo(BeNil())
+				Expect(transactions.saved).NotTo(BeNil())
+			})
+
+			It("should preserve outgoing transaction behavior for accounts that are not hold eligible", func() {
+				accounts := newAccountRepository()
+				transactions := &transactionRepository{}
+				holds := &effectiveHoldsFake{values: []domainhold.Instruction{{Allocated: mustMoney(100000), Released: mustMoney(0)}}}
+				sut := newCommandWithHolds(accounts, transactions, &outboxRepository{}, holds)
+
+				result, err := sut.Execute(context.Background(), validInput())
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result).NotTo(BeNil())
+				Expect(holds.calls).To(BeZero())
+			})
+
+			It("should reload effective holds when a serializable attempt is retried", func() {
+				accounts := newAccountRepository()
+				accounts.accounts[creditExternalID].HoldsEligible = true
+				transactions := &transactionRepository{saveErrors: []error{
+					&pgconn.PgError{Code: "23505", ConstraintName: "unique_entry_sequence_number"},
+				}}
+				holds := &effectiveHoldsFake{}
+				sut := newCommandWithHoldsAndUOW(accounts, transactions, &outboxRepository{}, holds, &retryingUnitOfWork{})
+
+				result, err := sut.Execute(context.Background(), validInput())
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result).NotTo(BeNil())
+				Expect(holds.calls).To(Equal(2))
+			})
+		})
+
+		Context("error cases", func() {
+			It("should reject an eligible outgoing entry that would consume retained funds", func() {
+				accounts := newAccountRepository()
+				accounts.accounts[creditExternalID].HoldsEligible = true
+				transactions := &transactionRepository{ledgerStates: map[string]account.LedgerState{
+					accounts.accounts[creditExternalID].ID.String(): {RunningBalance: 200000},
+				}}
+				holds := &effectiveHoldsFake{values: []domainhold.Instruction{{Allocated: mustMoney(100000), Released: mustMoney(0)}}}
+				outboxes := &outboxRepository{}
+				sut := newCommandWithHolds(accounts, transactions, outboxes, holds)
+
+				result, err := sut.Execute(context.Background(), validInput())
+
+				Expect(result).To(BeNil())
+				Expect(err).To(MatchError(fault.ErrInsufficientBalance))
+				Expect(transactions.saved).To(BeNil())
+				Expect(outboxes.saved).To(BeNil())
+			})
+		})
+	})
+
+	Describe("#Execute", func() {
 		Context("error cases", func() {
 			It("should reject different external IDs that resolve to the same account without persisting", func() {
 				input := validInput()
@@ -546,6 +616,32 @@ func newCommandWithLimit(accounts *accountRepository, transactions *transactionR
 		recorder = metrics[0]
 	}
 	return command.NewCreateTransaction(uow, accounts, transactions, outboxes, testTracer{}, testLogger{}, recorder, maxEntries)
+}
+
+func newCommandWithHolds(accounts *accountRepository, transactions *transactionRepository, outboxes *outboxRepository, holds domainhold.Repository) *command.CreateTransaction {
+	return newCommandWithHoldsAndUOW(accounts, transactions, outboxes, holds, &unitOfWork{})
+}
+
+func newCommandWithHoldsAndUOW(accounts *accountRepository, transactions *transactionRepository, outboxes *outboxRepository, holds domainhold.Repository, uow application.UnitOfWork) *command.CreateTransaction {
+	return command.NewCreateTransaction(uow, accounts, transactions, outboxes, testTracer{}, testLogger{}, newTestMetrics(), application.DefaultMaxTransactionEntries, holds)
+}
+
+type effectiveHoldsFake struct {
+	domainhold.Repository
+	values []domainhold.Instruction
+	err    error
+	calls  int
+}
+
+func (f *effectiveHoldsFake) FindEffectiveByAccount(context.Context, string, money.Currency) ([]domainhold.Instruction, error) {
+	f.calls++
+	return f.values, f.err
+}
+
+func mustMoney(amount int64) money.Money {
+	value, err := money.NewMoney(amount, money.BRL)
+	Expect(err).NotTo(HaveOccurred())
+	return value
 }
 
 type testTracer struct{}

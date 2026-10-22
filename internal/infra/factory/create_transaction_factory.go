@@ -21,6 +21,7 @@ func NewCreateTransactionFactory(
 		baseDeps.Log,
 		baseDeps.Prom,
 		baseDeps.Cfg.Transaction.MaxEntries,
+		composeBuild.BuildHoldRepo(),
 	)
 
 	createTransactionHandler := handler.NewCreateTransactionHandler(transactionCommand, baseDeps.Log, baseDeps.Tracer)

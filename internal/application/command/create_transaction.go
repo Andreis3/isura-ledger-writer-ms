@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"math"
 	"sort"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/andreis3/isura-ledger-ms/internal/application/service"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/account"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/fault"
+	domainhold "github.com/andreis3/isura-ledger-ms/internal/domain/hold"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/outbox"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/transaction"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/postgres/repository/criteria"
@@ -30,6 +32,7 @@ type CreateTransaction struct {
 	log                   application.Logger
 	metrics               application.Metrics
 	maxEntries            int
+	holdRepository        domainhold.Repository
 }
 
 func NewCreateTransaction(
@@ -41,9 +44,14 @@ func NewCreateTransaction(
 	log application.Logger,
 	metrics application.Metrics,
 	maxEntries int,
+	holdRepositories ...domainhold.Repository,
 ) *CreateTransaction {
 	if maxEntries <= 0 {
 		maxEntries = application.DefaultMaxTransactionEntries
+	}
+	var holds domainhold.Repository
+	if len(holdRepositories) > 0 {
+		holds = holdRepositories[0]
 	}
 	return &CreateTransaction{
 		uow:                   uow,
@@ -54,6 +62,7 @@ func NewCreateTransaction(
 		log:                   log,
 		metrics:               metrics,
 		maxEntries:            maxEntries,
+		holdRepository:        holds,
 	}
 }
 
@@ -168,6 +177,9 @@ func (c *CreateTransaction) persistNewTransaction(
 	if err := service.AssignLedgerEntries(ctx, c.transactionRepository, entityTransaction, accounts...); err != nil {
 		return err
 	}
+	if err := c.validateAvailableFunds(ctx, entityTransaction.Entries, accounts); err != nil {
+		return err
+	}
 	if err := resolveMovementEntries(entityTransaction, input.Movements); err != nil {
 		return err
 	}
@@ -178,6 +190,48 @@ func (c *CreateTransaction) persistNewTransaction(
 		return err
 	}
 	return c.saveCreatedEvent(ctx, entityTransaction, input)
+}
+
+func (c *CreateTransaction) validateAvailableFunds(ctx context.Context, entries []*transaction.Entry, accounts []*account.Account) error {
+	if c.holdRepository == nil {
+		return nil
+	}
+	accountsByID := make(map[string]*account.Account, len(accounts))
+	for _, acc := range accounts {
+		accountsByID[acc.ID.String()] = acc
+	}
+	retainedByAccount := make(map[string]int64)
+	for _, entry := range entries {
+		acc := accountsByID[entry.AccountID]
+		if acc == nil || !acc.HoldsEligible || !reducesAvailableBalance(acc, entry.Direction) {
+			continue
+		}
+		retained, exists := retainedByAccount[entry.AccountID]
+		if !exists {
+			holds, err := c.holdRepository.FindEffectiveByAccount(ctx, entry.AccountID, entry.Amount.Currency())
+			if err != nil {
+				return err
+			}
+			for _, instruction := range holds {
+				remaining := instruction.Allocated.Amount() - instruction.Released.Amount()
+				if remaining > 0 && retained > math.MaxInt64-remaining {
+					return fault.ErrInsufficientBalance
+				}
+				retained += remaining
+			}
+			retainedByAccount[entry.AccountID] = retained
+		}
+		if retained > 0 && entry.RunningBalance < retained {
+			return fault.ErrInsufficientBalance
+		}
+	}
+	return nil
+}
+
+func reducesAvailableBalance(acc *account.Account, direction transaction.Direction) bool {
+	debitIncreases := acc.AccountType == account.Asset || acc.AccountType == account.Expense
+	creditIncreases := acc.AccountType == account.Liability || acc.AccountType == account.Revenue || acc.AccountType == account.Equity
+	return (direction == transaction.Debit && !debitIncreases) || (direction == transaction.Credit && !creditIncreases)
 }
 
 func resolveMovementEntries(entityTransaction *transaction.Transaction, movements []dto.MovementInput) error {

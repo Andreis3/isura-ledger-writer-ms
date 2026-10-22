@@ -190,6 +190,7 @@ func newIntegrationCreateTransaction(pool *pgxpool.Pool) *command.CreateTransact
 		repository.NewOutBoxRepository(pool),
 		adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{},
 		application.DefaultMaxTransactionEntries,
+		repository.NewHoldRepository(pool),
 	)
 }
 

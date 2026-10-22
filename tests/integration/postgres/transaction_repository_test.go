@@ -31,6 +31,54 @@ import (
 
 var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: TRANSACTION REPOSITORY", func() {
 	Context("database behavior", func() {
+		It("should reject an outgoing transaction that would consume persisted holds", func() {
+			debitExternalID, creditExternalID := insertFundedAccountsForCommand(ctx, pool, 200000, 1)
+			var debitAccountID string
+			Expect(pool.QueryRow(ctx, `SELECT id FROM accounts WHERE account_external_id=$1`, debitExternalID).Scan(&debitAccountID)).To(Succeed())
+			var creditAccountID string
+			Expect(pool.QueryRow(ctx, `SELECT id FROM accounts WHERE account_external_id=$1`, creditExternalID).Scan(&creditAccountID)).To(Succeed())
+			Expect(pool.Exec(ctx, `UPDATE accounts SET holds_eligible=true WHERE id=$1`, debitAccountID)).Error().NotTo(HaveOccurred())
+			instruction := allocatedHold(debitAccountID, "availability-test", "reference-"+uuid.NewString())
+			instruction.Requested = amount(100000, money.BRL)
+			instruction.Allocated = amount(100000, money.BRL)
+			instruction.Pending = amount(0, money.BRL)
+			holdRepo := repository.NewHoldRepository(pool)
+			Expect(uow.NewUnitOfWork(pool).WithTransaction(ctx, func(txContext context.Context) error {
+				return holdRepo.Save(txContext, instruction)
+			})).To(Succeed())
+			defer func() {
+				_, err := pool.Exec(ctx, `DELETE FROM holds WHERE id=$1`, instruction.ID)
+				Expect(err).NotTo(HaveOccurred())
+				cleanupCommittedAccounts(ctx, pool, []string{debitAccountID, creditAccountID}, nil)
+			}()
+
+			key := "held-outgoing-" + uuid.NewString()
+			operation := string(transaction.OperationTransfer)
+			transactionAmount := int64(150000)
+			input := dto.CreateTransactionInput{
+				IdempotencyKey: &key,
+				Amount:         &transactionAmount,
+				Operation:      &operation,
+				Entries: []dto.EntryInput{
+					{AccountID: creditExternalID, Direction: string(transaction.Credit), Amount: transactionAmount, Currency: string(money.BRL)},
+					{AccountID: debitExternalID, Direction: string(transaction.Debit), Amount: transactionAmount, Currency: string(money.BRL)},
+				},
+				Movements: []dto.MovementInput{{Type: "TRANSFER", Description: "outgoing against hold", EntryPositions: []int{0, 1}}},
+			}
+
+			result, err := newIntegrationCreateTransaction(pool).Execute(ctx, input)
+
+			Expect(result).To(BeNil())
+			Expect(errors.Is(err, fault.ErrInsufficientBalance)).To(BeTrue())
+			var transactions, entries, events int
+			Expect(pool.QueryRow(ctx, `SELECT count(*) FROM transactions WHERE idempotency_key=$1`, key).Scan(&transactions)).To(Succeed())
+			Expect(pool.QueryRow(ctx, `SELECT count(*) FROM entries e JOIN transactions t ON t.id=e.transaction_id WHERE t.idempotency_key=$1`, key).Scan(&entries)).To(Succeed())
+			Expect(pool.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE aggregate_id IN (SELECT id FROM transactions WHERE idempotency_key=$1)`, key).Scan(&events)).To(Succeed())
+			Expect(transactions).To(BeZero())
+			Expect(entries).To(BeZero())
+			Expect(events).To(BeZero())
+		})
+
 		It("should reject insufficient balance before creating ledger records", func() {
 			accountA, accountB := insertAccounts(ctx, tx)
 			_, err := tx.Exec(ctx, `UPDATE accounts SET balance_policy = 'BALANCE_NON_NEGATIVE' WHERE id IN ($1, $2)`, accountA, accountB)
