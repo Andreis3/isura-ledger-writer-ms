@@ -9,8 +9,9 @@ import (
 )
 
 var (
-	ErrHoldConflict    = errors.New("hold identity conflicts with existing instruction")
-	ErrReleaseConflict = errors.New("hold release idempotency key conflicts with existing release")
+	ErrHoldConflict     = errors.New("hold identity conflicts with existing instruction")
+	ErrReleaseConflict  = errors.New("hold release idempotency key conflicts with existing release")
+	ErrDecisionConflict = errors.New("hold decision idempotency key conflicts with existing decision")
 )
 
 // History records an immutable decision or release applied to an instruction.
@@ -29,6 +30,18 @@ type Release struct {
 	CreatedAt                                                              time.Time
 }
 
+// Decision is an immutable resolution request and the result returned on replay.
+type Decision struct {
+	ID, HoldID, IdempotencyKey, RequestFingerprint string
+	AuthorizationReference, AuthorizedBy           string
+	Action                                         ResolutionAction
+	PolicyVersion, Reason, ResultStatus            string
+	PolicySnapshot                                 []byte
+	ExpectedVersion                                uint64
+	Requested, ResultAllocated, ResultPending      money.Money
+	CreatedAt                                      time.Time
+}
+
 // Repository persists hold state and its append-only audit records. It never
 // owns transaction boundaries; implementations participate in the caller UoW.
 type Repository interface {
@@ -41,4 +54,6 @@ type Repository interface {
 	FindHistory(ctx context.Context, holdID string) ([]History, error)
 	FindRelease(ctx context.Context, idempotencyKey string) (*Release, error)
 	SaveRelease(ctx context.Context, release Release) error
+	FindDecision(ctx context.Context, idempotencyKey string) (*Decision, error)
+	SaveDecision(ctx context.Context, decision Decision) error
 }

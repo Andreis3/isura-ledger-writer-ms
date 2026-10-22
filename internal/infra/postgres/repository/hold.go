@@ -12,6 +12,7 @@ import (
 	"github.com/andreis3/isura-ledger-ms/internal/infra/postgres/database"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/postgres/model"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -32,11 +33,11 @@ func (r *HoldRepository) Save(ctx context.Context, instruction *domainhold.Instr
 	_, err = resolveDB(ctx, r.db).Exec(ctx, `
 		INSERT INTO holds (id, account_id, currency, origin, reference, type, requested_amount,
 			allocated_amount, pending_amount, released_amount, status, policy_version,
-			request_fingerprint, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14)`,
+			request_fingerprint, version, allow_partial, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$16)`,
 		value.ID, value.AccountID, value.Currency, value.Origin, value.Reference, value.Type,
 		value.RequestedAmount, value.AllocatedAmount, value.PendingAmount, value.ReleasedAmount,
-		value.Status, nullableString(value.PolicyVersion), value.RequestFingerprint, now)
+		value.Status, nullableString(value.PolicyVersion), value.RequestFingerprint, value.Version, value.AllowPartial, now)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return fmt.Errorf("%w: %v", domainhold.ErrHoldConflict, err)
@@ -51,16 +52,19 @@ func (r *HoldRepository) Update(ctx context.Context, instruction *domainhold.Ins
 	if err != nil {
 		return err
 	}
+	if value.Version < 2 {
+		return domainhold.ErrHoldStateConflict
+	}
 	result, err := resolveDB(ctx, r.db).Exec(ctx, `
 		UPDATE holds SET allocated_amount=$2, pending_amount=$3, released_amount=$4,
-			status=$5, policy_version=$6, updated_at=$7 WHERE id=$1`,
+			status=$5, policy_version=$6, version=$7, updated_at=$8 WHERE id=$1 AND version=$9`,
 		value.ID, value.AllocatedAmount, value.PendingAmount, value.ReleasedAmount,
-		value.Status, nullableString(value.PolicyVersion), time.Now().UTC())
+		value.Status, nullableString(value.PolicyVersion), value.Version, time.Now().UTC(), value.Version-1)
 	if err != nil {
 		return fmt.Errorf("update hold: %w", err)
 	}
 	if result.RowsAffected() == 0 {
-		return pgx.ErrNoRows
+		return domainhold.ErrHoldStateConflict
 	}
 	return nil
 }
@@ -232,8 +236,58 @@ func (r *HoldRepository) SaveRelease(ctx context.Context, release domainhold.Rel
 	return nil
 }
 
+func (r *HoldRepository) FindDecision(ctx context.Context, key string) (*domainhold.Decision, error) {
+	var value model.HoldDecision
+	var policyVersion pgtype.Text
+	var currency string
+	err := resolveDB(ctx, r.db).QueryRow(ctx, `SELECT d.id, d.hold_id, d.idempotency_key,
+		d.request_fingerprint, d.authorization_reference, d.authorized_by, d.action, d.policy_version,
+		d.reason, d.result_status, d.policy_snapshot, d.expected_version, d.requested_amount,
+		d.result_allocated, d.result_pending, d.created_at, h.currency
+		FROM hold_decisions d JOIN holds h ON h.id=d.hold_id WHERE d.idempotency_key=$1`, key).Scan(
+		&value.ID, &value.HoldID, &value.IdempotencyKey, &value.RequestFingerprint,
+		&value.AuthorizationReference, &value.AuthorizedBy, &value.Action, &policyVersion,
+		&value.Reason, &value.ResultStatus, &value.PolicySnapshot, &value.ExpectedVersion,
+		&value.RequestedAmount, &value.ResultAllocated, &value.ResultPending, &value.CreatedAt, &currency)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("find hold decision: %w", err)
+	}
+	value.PolicyVersion = optionalText(policyVersion)
+	return model.ToHoldDecisionDomain(value, money.Currency(currency))
+}
+
+func (r *HoldRepository) SaveDecision(ctx context.Context, decision domainhold.Decision) error {
+	value, err := model.ToHoldDecisionModel(decision)
+	if err != nil {
+		return err
+	}
+	createdAt := value.CreatedAt
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+	_, err = resolveDB(ctx, r.db).Exec(ctx, `INSERT INTO hold_decisions
+		(id, hold_id, idempotency_key, request_fingerprint, authorization_reference, authorized_by,
+		action, expected_version, policy_version, policy_snapshot, requested_amount, reason,
+		result_status, result_allocated, result_pending, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+		value.ID, value.HoldID, value.IdempotencyKey, value.RequestFingerprint, value.AuthorizationReference,
+		value.AuthorizedBy, value.Action, value.ExpectedVersion, nullableString(value.PolicyVersion),
+		value.PolicySnapshot, value.RequestedAmount, value.Reason, value.ResultStatus,
+		value.ResultAllocated, value.ResultPending, createdAt)
+	if err != nil {
+		if hasConstraint(err, "idx_hold_decisions_idempotency_key") {
+			return fmt.Errorf("%w: %v", domainhold.ErrDecisionConflict, err)
+		}
+		return fmt.Errorf("save hold decision: %w", err)
+	}
+	return nil
+}
+
 const holdSelect = `SELECT id, account_id, currency, origin, reference, type, requested_amount,
-	allocated_amount, pending_amount, released_amount, status, policy_version, request_fingerprint,
+	allocated_amount, pending_amount, released_amount, status, policy_version, request_fingerprint, version, allow_partial,
 	created_at, updated_at FROM holds`
 
 type rowScanner interface{ Scan(dest ...any) error }
@@ -244,7 +298,7 @@ func scanHold(row rowScanner) (model.Hold, error) {
 	err := row.Scan(&value.ID, &value.AccountID, &value.Currency, &value.Origin, &value.Reference,
 		&value.Type, &value.RequestedAmount, &value.AllocatedAmount, &value.PendingAmount,
 		&value.ReleasedAmount, &value.Status, &policyVersion, &value.RequestFingerprint,
-		&value.CreatedAt, &value.UpdatedAt)
+		&value.Version, &value.AllowPartial, &value.CreatedAt, &value.UpdatedAt)
 	if err != nil {
 		return model.Hold{}, err
 	}
@@ -263,6 +317,11 @@ func optionalText(value pgtype.Text) string {
 		return ""
 	}
 	return value.String
+}
+
+func hasConstraint(err error, name string) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == name
 }
 
 func historyAmounts(history domainhold.History) (int64, int64, int64, int64, error) {

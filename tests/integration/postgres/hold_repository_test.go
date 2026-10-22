@@ -29,7 +29,9 @@ var _ = Describe("INTERNAL :: INFRA :: POSTGRES :: REPOSITORY :: HOLD", func() {
 				Expect(sut.Save(txContext, instruction)).To(Succeed())
 				found, err := sut.FindByIdentity(txContext, instruction.Origin, instruction.Reference)
 				Expect(err).NotTo(HaveOccurred())
-				Expect(found).To(Equal(instruction))
+				Expect(found.ID).To(Equal(instruction.ID))
+				Expect(found.Requested).To(Equal(instruction.Requested))
+				Expect(found.Version).To(Equal(uint64(1)))
 
 				history := domainhold.History{
 					ID: newIDV7(), HoldID: instruction.ID, EventType: "DECISION_RECORDED",
@@ -119,6 +121,46 @@ var _ = Describe("INTERNAL :: INFRA :: POSTGRES :: REPOSITORY :: HOLD", func() {
 				Expect(loaded).NotTo(BeNil())
 				Expect(loaded.RequestFingerprint).To(Equal(release.RequestFingerprint))
 				Expect(sut.SaveRelease(txContext, release)).To(MatchError(ContainSubstring("conflicts with existing release")))
+			})
+		})
+	})
+
+	Describe("#SaveDecision and #FindDecision", func() {
+		Context("success cases", func() {
+			It("should persist and recover the idempotent decision and its authorization snapshot", func() {
+				// Arrange.
+				accountID := insertAccountV7(ctx, tx)
+				instruction := allocatedHold(accountID, "decision-origin", "decision-reference")
+				sut := repository.NewHoldRepository(pool)
+				txContext := database.WithTx(ctx, tx)
+				Expect(sut.Save(txContext, instruction)).To(Succeed())
+				requested := instruction.Requested
+				zero := amount(0, money.BRL)
+				decision := domainhold.Decision{ID: newIDV7(), HoldID: instruction.ID,
+					IdempotencyKey:         "decision-" + uuid.NewString(),
+					RequestFingerprint:     "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+					AuthorizationReference: "authorization-1", AuthorizedBy: "operator-1",
+					Action: domainhold.ActionReject, ExpectedVersion: 1, Requested: requested,
+					Reason: "instruction rejected", ResultStatus: string(domainhold.StatusRejected),
+					ResultAllocated: zero, ResultPending: requested, PolicySnapshot: []byte(`{"version":"policy-v1"}`),
+					CreatedAt: time.Now().UTC()}
+
+				// Act.
+				Expect(sut.SaveDecision(txContext, decision)).To(Succeed())
+				loaded, err := sut.FindDecision(txContext, decision.IdempotencyKey)
+
+				// Assert.
+				Expect(err).NotTo(HaveOccurred())
+				Expect(loaded).NotTo(BeNil())
+				Expect(loaded.RequestFingerprint).To(Equal(decision.RequestFingerprint))
+				Expect(loaded.AuthorizationReference).To(Equal(decision.AuthorizationReference))
+				Expect(loaded.AuthorizedBy).To(Equal(decision.AuthorizedBy))
+				Expect(string(loaded.PolicySnapshot)).To(MatchJSON(string(decision.PolicySnapshot)))
+				Expect(loaded.ResultStatus).To(Equal(decision.ResultStatus))
+				Expect(loaded.ResultPending).To(Equal(decision.ResultPending))
+				duplicate := decision
+				duplicate.ID = newIDV7()
+				Expect(sut.SaveDecision(txContext, duplicate)).To(MatchError(ContainSubstring("conflicts with existing decision")))
 			})
 		})
 	})

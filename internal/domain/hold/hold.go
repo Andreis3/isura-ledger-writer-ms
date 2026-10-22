@@ -203,6 +203,9 @@ func (i *Instruction) Release(amount money.Money) error {
 	if i == nil || !amount.Currency().IsValid() || amount.Currency() != i.Allocated.Currency() || !amount.IsPositive() {
 		return fmt.Errorf("%w: amount must be positive and use the hold currency", ErrInvalidRelease)
 	}
+	if i.Version == ^uint64(0) {
+		return fmt.Errorf("%w: version exhausted", ErrInvalidRelease)
+	}
 	remaining := i.Allocated.Amount() - i.Released.Amount()
 	if remaining < 0 || amount.Amount() > remaining {
 		return fmt.Errorf("%w: amount exceeds retained balance", ErrInvalidRelease)
@@ -212,6 +215,7 @@ func (i *Instruction) Release(amount money.Money) error {
 		return fmt.Errorf("%w: add released amount: %w", ErrInvalidRelease, err)
 	}
 	i.Released = released
+	i.Version++
 	if i.Released.Equal(i.Allocated) {
 		i.Status = StatusReleased
 	}
