@@ -55,6 +55,22 @@ var _ = Describe("INTERNAL :: DOMAIN :: HOLD :: HOLD", func() {
 
 	Describe("#Instruction", func() {
 		Context("success cases", func() {
+			It("should validate allocated, rejected, and released lifecycle states", func() {
+				requested := mustMoney(100, money.BRL)
+				zero := mustMoney(0, money.BRL)
+				cases := []hold.Instruction{
+					{ID: "h-allocated", AccountID: "a1", Currency: "BRL", Origin: "issuer", Reference: "allocated", Type: hold.Judicial,
+						Requested: requested, Allocated: requested, Pending: zero, Released: zero, Status: hold.StatusAllocated},
+					{ID: "h-rejected", AccountID: "a1", Currency: "BRL", Origin: "issuer", Reference: "rejected", Type: hold.Judicial,
+						Requested: requested, Allocated: zero, Pending: requested, Released: zero, Status: hold.StatusRejected},
+					{ID: "h-released", AccountID: "a1", Currency: "BRL", Origin: "issuer", Reference: "released", Type: hold.Judicial,
+						Requested: requested, Allocated: requested, Pending: zero, Released: requested, Status: hold.StatusReleased},
+				}
+				for _, instruction := range cases {
+					Expect(instruction.Validate()).To(Succeed(), instruction.Status)
+				}
+			})
+
 			It("should fingerprint immutable content and allow a bounded partial release", func() {
 				requested := mustMoney(100, money.BRL)
 				instruction := hold.Instruction{ID: "h1", AccountID: "a1", Currency: "BRL", Origin: "issuer", Reference: "ref-1", Type: hold.Judicial, Requested: requested, Allocated: mustMoney(80, money.BRL), Pending: mustMoney(20, money.BRL), Released: mustMoney(0, money.BRL), Status: hold.StatusPartiallyAllocated}
@@ -135,6 +151,29 @@ var _ = Describe("INTERNAL :: DOMAIN :: HOLD :: HOLD", func() {
 		})
 
 		Context("error cases", func() {
+			It("should reject exhausted versions, invalid amounts, incomplete allocations, and unknown actions", func() {
+				instruction := pendingInstruction(false)
+				instruction.Version = ^uint64(0)
+				err := instruction.Resolve(hold.Resolution{Action: hold.ActionAllocate, ExpectedStatus: hold.StatusPendingReview,
+					ExpectedVersion: instruction.Version, Allocated: mustMoney(100, money.BRL)})
+				Expect(errors.Is(err, hold.ErrInvalidResolution)).To(BeTrue())
+
+				instruction = pendingInstruction(false)
+				err = instruction.Resolve(hold.Resolution{Action: hold.ActionAllocate, ExpectedStatus: hold.StatusPendingReview,
+					ExpectedVersion: 3, Allocated: mustMoney(99, money.BRL)})
+				Expect(errors.Is(err, hold.ErrInvalidResolution)).To(BeTrue())
+
+				instruction = pendingInstruction(true)
+				err = instruction.Resolve(hold.Resolution{Action: hold.ActionPartiallyAllocate, ExpectedStatus: hold.StatusPendingReview,
+					ExpectedVersion: 3, Allocated: mustMoney(100, money.BRL)})
+				Expect(errors.Is(err, hold.ErrInvalidResolution)).To(BeTrue())
+
+				instruction = pendingInstruction(false)
+				err = instruction.Resolve(hold.Resolution{Action: "UNKNOWN", ExpectedStatus: hold.StatusPendingReview,
+					ExpectedVersion: 3, Allocated: mustMoney(0, money.BRL)})
+				Expect(errors.Is(err, hold.ErrInvalidResolution)).To(BeTrue())
+			})
+
 			It("should reject stale state or version without mutating the instruction", func() {
 				instruction := pendingInstruction(true)
 				before := instruction

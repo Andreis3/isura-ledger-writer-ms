@@ -428,9 +428,25 @@ var _ = Describe("INTERNAL :: DOMAIN :: TRANSACTION :: TRANSACTION", func() {
 				Expect(err).To(BeNil())
 				Expect(entry).NotTo(BeNil())
 			})
+
+			It("should accept an explicit UUIDv7 entry identifier", func() {
+				amount, err := money.NewMoney(100, money.BRL)
+				Expect(err).NotTo(HaveOccurred())
+				entry, err := transaction.NewEntryBuilder().WithID("019ff448-c43d-70d3-83c7-dfa0674469b7").
+					WithTransactionID("019ff448-c43d-70d3-83c7-dfa0674469b8").
+					WithAccountExternalID("e4e5e6e7-e8e9-410e-a11e-e12e13e14e15").
+					WithDirection(transaction.Credit).WithAmount(amount).Build()
+				Expect(err).NotTo(HaveOccurred())
+				Expect(entry.ID.String()).To(Equal("019ff448-c43d-70d3-83c7-dfa0674469b7"))
+			})
 		})
 
 		Context("error cases", func() {
+			It("should reject an entry identifier that is not UUIDv7", func() {
+				_, err := transaction.NewEntryBuilder().WithID("not-a-uuid").Build()
+				Expect(err).To(HaveOccurred())
+			})
+
 			It("should return an error when direction is invalid", func() {
 				id, _ := entity.NewIDV7()
 				amount, _ := money.NewMoney(100, money.BRL)

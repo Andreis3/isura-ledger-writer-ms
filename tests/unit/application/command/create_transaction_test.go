@@ -32,6 +32,17 @@ const (
 )
 
 var _ = Describe("CreateTransaction", func() {
+	Context("entry limits", func() {
+		It("uses the default maximum when the configured limit is nonpositive", func() {
+			entries := make([]dto.EntryInput, application.DefaultMaxTransactionEntries+1)
+			sut := newCommandWithLimit(newAccountRepository(), &transactionRepository{}, &outboxRepository{}, &unitOfWork{}, 0)
+
+			_, err := sut.Execute(context.Background(), dto.CreateTransactionInput{Entries: entries})
+
+			Expect(errors.Is(err, transaction.ErrInvalidMaxEntries)).To(BeTrue())
+		})
+	})
+
 	Context("movement persistence and idempotency", func() {
 		It("persists movement references to the assigned entries", func() {
 			input := inputWithMovement()
