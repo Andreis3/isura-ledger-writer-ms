@@ -19,6 +19,7 @@ import (
 	"github.com/andreis3/isura-ledger-ms/internal/infra/postgres/uow"
 	adaptermocks "github.com/andreis3/isura-ledger-ms/tests/mocks/infra/adapter"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -89,6 +90,38 @@ var _ = Describe("INTERNAL :: APPLICATION :: COMMAND :: RESOLVE PENDING HOLD (PO
 		input.Reason = "materially different"
 		_, err = sut.Execute(authorizedResolutionContext(), input)
 		Expect(errors.Is(err, hold.ErrDecisionConflict)).To(BeTrue())
+		assertResolutionRows(instruction.ID, input.DecisionID, 1, 1, 1)
+	})
+
+	It("should recover a committed decision when the commit acknowledgement is lost", func() {
+		accountID := insertAccount(ctx, pool)
+		instruction := pendingHoldFixture(accountID)
+		holds := repository.NewHoldRepository(pool)
+		Expect(holds.Save(ctx, instruction)).To(Succeed())
+		injected := false
+		begin := func(ctx context.Context) (pgx.Tx, error) {
+			realTx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
+			if err != nil {
+				return nil, err
+			}
+			if !injected {
+				injected = true
+				return &acknowledgedCommitLostTx{Tx: realTx}, nil
+			}
+			return realTx, nil
+		}
+		sut := command.NewResolvePendingHold(uow.NewUnitOfWorkWithBegin(begin), repository.NewAccountRepository(pool),
+			repository.NewTransactionRepository(pool), holds, fixedHoldPolicy{}, repository.NewOutBoxRepository(pool),
+			adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{})
+		input := rejectDecision(instruction, "decision-"+uuid.NewString())
+
+		result, err := sut.Execute(authorizedResolutionContext(), input)
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(injected).To(BeTrue())
+		Expect(result.IdempotentReplay).To(BeTrue())
+		Expect(result.Decision.IdempotencyKey).To(Equal(input.DecisionID))
+		Expect(result.Instruction.Status).To(Equal(hold.StatusRejected))
 		assertResolutionRows(instruction.ID, input.DecisionID, 1, 1, 1)
 	})
 
