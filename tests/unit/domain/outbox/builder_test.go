@@ -3,8 +3,10 @@
 package outbox_test
 
 import (
+	"errors"
 	"time"
 
+	"github.com/andreis3/isura-ledger-ms/internal/domain/fault"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/outbox"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -49,5 +51,26 @@ var _ = Describe("outbox builder", func() {
 
 		Expect(result).To(BeNil())
 		Expect(err).To(HaveOccurred())
+	})
+
+	It("rejects a publication timestamp in the future", func() {
+		future := time.Now().Add(time.Hour)
+		_, err := outbox.NewOutboxBuilder().WithID().WithAggregateID("aggregate-1").
+			WithAggregateType(outbox.Transaction).WithEventType(outbox.TransactionCreated).
+			WithPublishedAt(future).Build()
+
+		var domainErr *fault.DomainError
+		Expect(err).To(HaveOccurred())
+		Expect(errors.As(err, &domainErr)).To(BeTrue())
+		Expect(domainErr.Fields).To(HaveKeyWithValue("published_at", "cannot be in the future"))
+	})
+
+	It("leaves the publication timestamp unset when omitted", func() {
+		result, err := outbox.NewOutboxBuilder().WithID().WithAggregateID("aggregate-1").
+			WithAggregateType(outbox.Transaction).WithEventType(outbox.TransactionCreated).
+			WithPublishedAt().Build()
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.PublishedAt).To(BeNil())
 	})
 })

@@ -70,6 +70,18 @@ func (r *ObservabilityHoldRepo) FindRelease(ctx context.Context, key string) (*h
 func (r *ObservabilityHoldRepo) SaveRelease(ctx context.Context, release hold.Release) error {
 	return r.observe(ctx, "SaveRelease", "hold_releases", func(ctx context.Context) error { return r.repo.SaveRelease(ctx, release) })
 }
+func (r *ObservabilityHoldRepo) FindDecision(ctx context.Context, key string) (*hold.Decision, error) {
+	var value *hold.Decision
+	err := r.observe(ctx, "FindDecision", "hold_decisions", func(ctx context.Context) error {
+		var err error
+		value, err = r.repo.FindDecision(ctx, key)
+		return err
+	})
+	return value, err
+}
+func (r *ObservabilityHoldRepo) SaveDecision(ctx context.Context, decision hold.Decision) error {
+	return r.observe(ctx, "SaveDecision", "hold_decisions", func(ctx context.Context) error { return r.repo.SaveDecision(ctx, decision) })
+}
 
 func (r *ObservabilityHoldRepo) observe(ctx context.Context, method, table string, operation func(context.Context) error) error {
 	ctx, span := r.tracer.Start(ctx, "HoldRepository."+method)

@@ -5,6 +5,7 @@ package account_test
 
 import (
 	"errors"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -16,6 +17,21 @@ import (
 )
 
 var _ = Describe("INTERNAL :: DOMAIN :: ACCOUNT :: ACCOUNT", func() {
+	Describe("#Status.IsValid", func() {
+		Context("success cases", func() {
+			It("should accept each supported account status", func() {
+				Expect(account.StatusActive.IsValid()).To(BeTrue())
+				Expect(account.StatusBlocked.IsValid()).To(BeTrue())
+				Expect(account.StatusClosed.IsValid()).To(BeTrue())
+			})
+		})
+		Context("error cases", func() {
+			It("should reject an unknown account status", func() {
+				Expect(account.Status("UNKNOWN").IsValid()).To(BeFalse())
+			})
+		})
+	})
+
 	Describe("#NewAccountBuilder", func() {
 		Context("success cases", func() {
 			It("should not return an error when build new account", func() {
@@ -68,6 +84,32 @@ var _ = Describe("INTERNAL :: DOMAIN :: ACCOUNT :: ACCOUNT", func() {
 					WithCurrency("INVALID").
 					Build()
 				Expect(err).NotTo(BeNil())
+			})
+		})
+	})
+
+	Describe("#WithCreatedAt and #WithUpdatedAt", func() {
+		Context("success cases", func() {
+			It("should assign current timestamps when no explicit value is supplied", func() {
+				builder := validAccountBuilder().WithCreatedAt().WithUpdatedAt()
+				acc, err := builder.Build()
+				Expect(err).NotTo(HaveOccurred())
+				Expect(acc.CreatedAt).NotTo(BeZero())
+				Expect(acc.UpdatedAt).NotTo(BeZero())
+			})
+		})
+		Context("error cases", func() {
+			It("should reject future account timestamps with the corresponding field errors", func() {
+				future := time.Now().Add(time.Hour)
+				_, createdErr := validAccountBuilder().WithCreatedAt(future).Build()
+				var createdDomainErr *fault.DomainError
+				Expect(errors.As(createdErr, &createdDomainErr)).To(BeTrue())
+				Expect(createdDomainErr.Fields).To(HaveKeyWithValue("created_at", "cannot be in the future"))
+
+				_, updatedErr := validAccountBuilder().WithUpdatedAt(future).Build()
+				var updatedDomainErr *fault.DomainError
+				Expect(errors.As(updatedErr, &updatedDomainErr)).To(BeTrue())
+				Expect(updatedDomainErr.Fields).To(HaveKeyWithValue("updated_at", "cannot be in the future"))
 			})
 		})
 	})
@@ -184,3 +226,8 @@ var _ = Describe("INTERNAL :: DOMAIN :: ACCOUNT :: ACCOUNT", func() {
 	})
 
 })
+
+func validAccountBuilder() *account.AccountBuilder {
+	return account.NewAccountBuilder().WithID().WithAccountExternalID("d589965c-1622-4329-98f9-f13354a2e4dc").
+		WithAccountNumber("123456").WithBalancePolicy(string(account.BalanceNonNegative)).WithCurrency(string(money.BRL))
+}

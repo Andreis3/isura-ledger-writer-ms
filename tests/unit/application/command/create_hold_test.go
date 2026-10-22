@@ -265,6 +265,7 @@ var _ = Describe("INTERNAL :: APPLICATION :: COMMAND :: CREATE HOLD", func() {
 				Expect(result.Instruction.Status).To(Equal(hold.StatusPartiallyAllocated))
 				Expect(result.Instruction.Allocated.Amount()).To(Equal(int64(160)))
 				Expect(result.Instruction.Pending.Amount()).To(Equal(int64(340)))
+				Expect(repo.saved.AllowPartial).To(BeTrue())
 			})
 			It("should persist an ineligible account request for review without reading its balance", func() {
 				requested, _ := money.NewMoney(500, money.BRL)

@@ -32,6 +32,7 @@ func (d CreateHoldInput) CreateHoldFacade() (*hold.Instruction, error) {
 		Origin: d.Origin, Reference: d.Reference, Type: d.Type,
 		Requested: d.Requested, Allocated: zero, Pending: d.Requested,
 		Released: zero, Status: hold.StatusPendingReview,
+		Version: 1,
 	}
 	instruction.RequestFingerprint = instruction.Fingerprint()
 	if err := instruction.Validate(); err != nil {

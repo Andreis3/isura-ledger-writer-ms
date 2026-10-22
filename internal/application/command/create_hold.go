@@ -117,6 +117,7 @@ func (c *CreateHold) Execute(ctx context.Context, input dto.CreateHoldInput) (ou
 				}
 			}
 			if found {
+				instruction.AllowPartial = policy.AllowPartial
 				_, balance, err := c.transactions.FindLatestLedgerState(txCtx, acc.ID.String())
 				if err != nil {
 					return err
