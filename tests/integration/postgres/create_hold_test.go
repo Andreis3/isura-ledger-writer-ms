@@ -16,6 +16,7 @@ import (
 	"github.com/andreis3/isura-ledger-ms/internal/domain/money"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/postgres/repository"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/postgres/uow"
+	adaptermocks "github.com/andreis3/isura-ledger-ms/tests/mocks/infra/adapter"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	. "github.com/onsi/ginkgo/v2"
@@ -26,7 +27,7 @@ var _ = Describe("INTERNAL :: APPLICATION :: COMMAND :: CREATE HOLD (POSTGRES)",
 	It("should persist one instruction and one event for concurrent identical requests", func() {
 		accountID := insertEligibleCommandAccount(ctx, pool)
 		holds := repository.NewHoldRepository(pool)
-		sut := command.NewCreateHold(uow.NewUnitOfWork(pool), repository.NewAccountRepository(pool), repository.NewTransactionRepository(pool), holds, nil, repository.NewOutBoxRepository(pool))
+		sut := command.NewCreateHold(uow.NewUnitOfWork(pool), repository.NewAccountRepository(pool), repository.NewTransactionRepository(pool), holds, nil, repository.NewOutBoxRepository(pool), adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{})
 		input := dto.CreateHoldInput{AccountID: accountID, Currency: string(money.BRL), Origin: "concurrent-origin-" + uuid.NewString(), Reference: "reference", Type: hold.Judicial, Requested: amount(500, money.BRL)}
 		start := make(chan struct{})
 		outputs := make([]*command.CreateHoldOutput, 2)
@@ -66,7 +67,7 @@ var _ = Describe("INTERNAL :: APPLICATION :: COMMAND :: CREATE HOLD (POSTGRES)",
 		Expect(pool.QueryRow(ctx, `SELECT id FROM accounts WHERE account_external_id=$1`, debitExternalID).Scan(&debitAccountID)).To(Succeed())
 		Expect(pool.Exec(ctx, `UPDATE accounts SET holds_eligible=true WHERE id=$1`, debitAccountID)).Error().NotTo(HaveOccurred())
 		holds := repository.NewHoldRepository(pool)
-		createHold := command.NewCreateHold(uow.NewUnitOfWork(pool), repository.NewAccountRepository(pool), repository.NewTransactionRepository(pool), holds, fixedHoldPolicy{}, repository.NewOutBoxRepository(pool))
+		createHold := command.NewCreateHold(uow.NewUnitOfWork(pool), repository.NewAccountRepository(pool), repository.NewTransactionRepository(pool), holds, fixedHoldPolicy{}, repository.NewOutBoxRepository(pool), adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{})
 		input := dto.CreateHoldInput{AccountID: debitAccountID, Currency: string(money.BRL), Origin: "concurrent-funds-" + uuid.NewString(), Reference: "reference", Type: hold.Judicial, Requested: amount(150000, money.BRL)}
 		createTransaction := newIntegrationCreateTransaction(pool)
 		transactionInput := outgoingTransactionInput(debitExternalID, creditExternalID, 150000)

@@ -17,6 +17,8 @@ import (
 	"github.com/andreis3/isura-ledger-ms/internal/infra/postgres/repository/criteria"
 )
 
+const createHoldCommand = "CreateHold"
+
 // HoldPolicyProvider supplies an explicitly versioned policy for an eligible account.
 type HoldPolicyProvider interface {
 	PolicyFor(ctx context.Context, account account.Account, holdType hold.HoldType) (hold.AllocationPolicy, bool, error)
@@ -34,13 +36,40 @@ type CreateHold struct {
 	holds        hold.Repository
 	policies     HoldPolicyProvider
 	outbox       outbox.Repository
+	tracer       application.Tracer
+	log          application.Logger
+	metrics      application.Metrics
 }
 
-func NewCreateHold(uow application.UnitOfWork, accounts account.Repository, transactions transaction.Repository, holds hold.Repository, policies HoldPolicyProvider, outboxRepo outbox.Repository) *CreateHold {
-	return &CreateHold{uow: uow, accounts: accounts, transactions: transactions, holds: holds, policies: policies, outbox: outboxRepo}
+func NewCreateHold(
+	uow application.UnitOfWork,
+	accounts account.Repository,
+	transactions transaction.Repository,
+	holds hold.Repository,
+	policies HoldPolicyProvider,
+	outboxRepo outbox.Repository,
+	tracer application.Tracer,
+	log application.Logger,
+	metrics application.Metrics,
+) *CreateHold {
+	return &CreateHold{
+		uow: uow, accounts: accounts, transactions: transactions, holds: holds,
+		policies: policies, outbox: outboxRepo, tracer: tracer, log: log, metrics: metrics,
+	}
 }
 
-func (c *CreateHold) Execute(ctx context.Context, input dto.CreateHoldInput) (*CreateHoldOutput, error) {
+func (c *CreateHold) Execute(ctx context.Context, input dto.CreateHoldInput) (output *CreateHoldOutput, resultErr error) {
+	started := time.Now()
+	ctx, span := c.tracer.Start(ctx, createHoldCommand+".Execute")
+	defer func() {
+		state, replay := "failure", false
+		if output != nil && output.Instruction != nil {
+			state = holdCommandState(output.Instruction.Status)
+			replay = output.IdempotentReplay
+		}
+		observeHoldCommand(ctx, started, span, c.log, c.metrics, createHoldCommand, state, replay, resultErr)
+	}()
+
 	instruction, err := input.CreateHoldFacade()
 	if err != nil {
 		return nil, err
@@ -173,4 +202,17 @@ func (c *CreateHold) Execute(ctx context.Context, input dto.CreateHoldInput) (*C
 		return nil, fmt.Errorf("create hold: %w", err)
 	}
 	return result, nil
+}
+
+func holdCommandState(status hold.HoldStatus) string {
+	switch status {
+	case hold.StatusAllocated:
+		return "allocated"
+	case hold.StatusPartiallyAllocated:
+		return "partially_allocated"
+	case hold.StatusReleased:
+		return "released"
+	default:
+		return "pending"
+	}
 }

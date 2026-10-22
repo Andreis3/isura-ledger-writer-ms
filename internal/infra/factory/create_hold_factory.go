@@ -17,6 +17,9 @@ func NewCreateHoldFactory(baseDeps *dependency.BaseDeps, policies command.HoldPo
 		composer.BuildHoldRepo(),
 		policies,
 		composer.BuildOutboxRepo(),
+		baseDeps.Tracer,
+		baseDeps.Log,
+		baseDeps.Prom,
 	)
 }
 

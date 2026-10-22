@@ -18,6 +18,8 @@ import (
 	"github.com/andreis3/isura-ledger-ms/internal/domain/outbox"
 )
 
+const releaseHoldCommand = "ReleaseHold"
+
 // ReleaseHoldOutput describes a newly applied or replayed release.
 type ReleaseHoldOutput struct {
 	Instruction      *hold.Instruction
@@ -27,19 +29,42 @@ type ReleaseHoldOutput struct {
 
 // ReleaseHold applies an authorized release within the ledger unit of work.
 type ReleaseHold struct {
-	uow    application.UnitOfWork
-	holds  hold.Repository
-	outbox outbox.Repository
+	uow     application.UnitOfWork
+	holds   hold.Repository
+	outbox  outbox.Repository
+	tracer  application.Tracer
+	log     application.Logger
+	metrics application.Metrics
 }
 
 // NewReleaseHold constructs the release command.
-func NewReleaseHold(uow application.UnitOfWork, holds hold.Repository, outboxRepo outbox.Repository) *ReleaseHold {
-	return &ReleaseHold{uow: uow, holds: holds, outbox: outboxRepo}
+func NewReleaseHold(
+	uow application.UnitOfWork,
+	holds hold.Repository,
+	outboxRepo outbox.Repository,
+	tracer application.Tracer,
+	log application.Logger,
+	metrics application.Metrics,
+) *ReleaseHold {
+	return &ReleaseHold{uow: uow, holds: holds, outbox: outboxRepo, tracer: tracer, log: log, metrics: metrics}
 }
 
 // Execute applies a partial or total release, preserving idempotency and audit data.
-func (c *ReleaseHold) Execute(ctx context.Context, input dto.ReleaseHoldInput) (*ReleaseHoldOutput, error) {
-	if c == nil || c.uow == nil || c.holds == nil || c.outbox == nil ||
+func (c *ReleaseHold) Execute(ctx context.Context, input dto.ReleaseHoldInput) (output *ReleaseHoldOutput, resultErr error) {
+	if c == nil {
+		return nil, hold.ErrInvalidRelease
+	}
+	started := time.Now()
+	ctx, span := c.tracer.Start(ctx, releaseHoldCommand+".Execute")
+	defer func() {
+		state, replay := "success", false
+		if output != nil {
+			replay = output.IdempotentReplay
+		}
+		observeHoldCommand(ctx, started, span, c.log, c.metrics, releaseHoldCommand, state, replay, resultErr)
+	}()
+
+	if c.uow == nil || c.holds == nil || c.outbox == nil ||
 		strings.TrimSpace(input.HoldID) == "" || strings.TrimSpace(input.IdempotencyKey) == "" ||
 		strings.TrimSpace(input.AuthorizationReference) == "" || !input.Amount.Currency().IsValid() || !input.Amount.IsPositive() {
 		return nil, hold.ErrInvalidRelease

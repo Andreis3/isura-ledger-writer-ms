@@ -13,5 +13,8 @@ func NewReleaseHoldFactory(baseDeps *dependency.BaseDeps) *command.ReleaseHold {
 		uow.NewUnitOfWork(baseDeps.Pg.Pool(), baseDeps.Prom),
 		composer.BuildHoldRepo(),
 		composer.BuildOutboxRepo(),
+		baseDeps.Tracer,
+		baseDeps.Log,
+		baseDeps.Prom,
 	)
 }

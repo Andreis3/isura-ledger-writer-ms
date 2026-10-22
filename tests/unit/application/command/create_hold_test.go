@@ -16,6 +16,7 @@ import (
 	"github.com/andreis3/isura-ledger-ms/internal/domain/outbox"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/transaction"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/postgres/repository/criteria"
+	adaptermocks "github.com/andreis3/isura-ledger-ms/tests/mocks/infra/adapter"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -107,6 +108,46 @@ func (r holdPolicyFake) PolicyFor(context.Context, account.Account, hold.HoldTyp
 	return r.policy, r.found, nil
 }
 
+type recordingHoldMetrics struct {
+	adaptermocks.SilentMetricsMock
+	commandName, commandState string
+	idempotencyResults        []string
+	durationCalls             int
+}
+
+func (m *recordingHoldMetrics) RecordCommandTotal(commandName, state string) {
+	m.commandName, m.commandState = commandName, state
+}
+
+func (m *recordingHoldMetrics) RecordCommandDuration(string, float64) { m.durationCalls++ }
+
+func (m *recordingHoldMetrics) RecordIdempotencyTotal(result string) {
+	m.idempotencyResults = append(m.idempotencyResults, result)
+}
+
+type recordingHoldTracer struct {
+	adaptermocks.SilentTracerMock
+	spanName string
+	span     *recordingHoldSpan
+}
+
+func (t *recordingHoldTracer) Start(ctx context.Context, name string) (context.Context, application.Span) {
+	_, baseSpan := adaptermocks.SilentTracerMock{}.Start(ctx, name)
+	t.spanName = name
+	t.span = &recordingHoldSpan{Span: baseSpan}
+	return ctx, t.span
+}
+
+type recordingHoldSpan struct {
+	application.Span
+	ended       bool
+	recordedErr error
+}
+
+func (s *recordingHoldSpan) End() { s.ended = true }
+
+func (s *recordingHoldSpan) RecordError(err error) { s.recordedErr = err }
+
 var _ = Describe("INTERNAL :: APPLICATION :: COMMAND :: CREATE HOLD", func() {
 	Describe("#Execute", func() {
 		Context("success cases", func() {
@@ -117,7 +158,7 @@ var _ = Describe("INTERNAL :: APPLICATION :: COMMAND :: CREATE HOLD", func() {
 				stored, err := input.CreateHoldFacade()
 				Expect(err).NotTo(HaveOccurred())
 				repo := &holdRepositoryFake{existing: stored}
-				sut := command.NewCreateHold(holdUOW{}, nil, nil, repo, nil, nil)
+				sut := command.NewCreateHold(holdUOW{}, nil, nil, repo, nil, nil, adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{})
 
 				result, err := sut.Execute(context.Background(), input)
 
@@ -132,7 +173,9 @@ var _ = Describe("INTERNAL :: APPLICATION :: COMMAND :: CREATE HOLD", func() {
 				Expect(err).NotTo(HaveOccurred())
 				accountEntity := &account.Account{ID: accountID, Currency: money.BRL, HoldsEligible: true}
 				repo := &holdRepositoryFake{}
-				sut := command.NewCreateHold(holdUOW{}, holdAccountRepoFake{value: accountEntity}, holdTransactionRepoFake{}, repo, holdPolicyFake{}, holdOutboxRepoFake{})
+				tracer := &recordingHoldTracer{}
+				metrics := &recordingHoldMetrics{}
+				sut := command.NewCreateHold(holdUOW{}, holdAccountRepoFake{value: accountEntity}, holdTransactionRepoFake{}, repo, holdPolicyFake{}, holdOutboxRepoFake{}, tracer, adaptermocks.SilentLoggerMock{}, metrics)
 				input := dto.CreateHoldInput{AccountID: accountID.String(), Currency: string(money.BRL), Origin: "origin", Reference: "unconfigured-policy", Type: hold.Judicial, Requested: requested}
 
 				result, err := sut.Execute(context.Background(), input)
@@ -142,6 +185,12 @@ var _ = Describe("INTERNAL :: APPLICATION :: COMMAND :: CREATE HOLD", func() {
 				Expect(result.Instruction.Allocated.Amount()).To(BeZero())
 				Expect(result.Instruction.Pending).To(Equal(requested))
 				Expect(repo.saved).To(BeIdenticalTo(result.Instruction))
+				Expect(tracer.spanName).To(Equal("CreateHold.Execute"))
+				Expect(tracer.span.ended).To(BeTrue())
+				Expect(metrics.commandName).To(Equal("CreateHold"))
+				Expect(metrics.commandState).To(Equal("pending"))
+				Expect(metrics.idempotencyResults).To(Equal([]string{"new"}))
+				Expect(metrics.durationCalls).To(Equal(1))
 			})
 		})
 		Context("error cases", func() {
@@ -152,7 +201,7 @@ var _ = Describe("INTERNAL :: APPLICATION :: COMMAND :: CREATE HOLD", func() {
 				stored, err := input.CreateHoldFacade()
 				Expect(err).NotTo(HaveOccurred())
 				stored.RequestFingerprint = "different-fingerprint"
-				sut := command.NewCreateHold(holdUOW{}, nil, nil, &holdRepositoryFake{existing: stored}, nil, nil)
+				sut := command.NewCreateHold(holdUOW{}, nil, nil, &holdRepositoryFake{existing: stored}, nil, nil, adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{})
 
 				result, err := sut.Execute(context.Background(), input)
 
@@ -173,7 +222,9 @@ var _ = Describe("INTERNAL :: APPLICATION :: COMMAND :: RELEASE HOLD", func() {
 				instruction := &hold.Instruction{ID: "hold-1", AccountID: "account-1", Currency: "BRL", Origin: "system", Reference: "ref", Type: hold.Judicial, Requested: allocated, Allocated: allocated, Pending: zero, Released: zero, Status: hold.StatusAllocated}
 				repo := &holdRepositoryFake{byID: instruction}
 				box := &releaseOutboxFake{}
-				sut := command.NewReleaseHold(holdUOW{}, repo, box)
+				tracer := &recordingHoldTracer{}
+				metrics := &recordingHoldMetrics{}
+				sut := command.NewReleaseHold(holdUOW{}, repo, box, tracer, adaptermocks.SilentLoggerMock{}, metrics)
 
 				result, err := sut.Execute(context.Background(), dto.ReleaseHoldInput{HoldID: "hold-1", IdempotencyKey: "release-1", AuthorizationReference: "auth-1", Amount: amount})
 
@@ -184,6 +235,12 @@ var _ = Describe("INTERNAL :: APPLICATION :: COMMAND :: RELEASE HOLD", func() {
 				Expect(repo.history).To(HaveLen(1))
 				Expect(repo.history[0].EventType).To(Equal("RELEASE_RECORDED"))
 				Expect(box.saved.EventType).To(Equal(outbox.HoldReleased))
+				Expect(tracer.spanName).To(Equal("ReleaseHold.Execute"))
+				Expect(tracer.span.ended).To(BeTrue())
+				Expect(metrics.commandName).To(Equal("ReleaseHold"))
+				Expect(metrics.commandState).To(Equal("success"))
+				Expect(metrics.idempotencyResults).To(Equal([]string{"new"}))
+				Expect(metrics.durationCalls).To(Equal(1))
 			})
 			It("should mark the hold released when the remaining retained amount is released", func() {
 				allocated, _ := money.NewMoney(1000, money.BRL)
@@ -192,7 +249,7 @@ var _ = Describe("INTERNAL :: APPLICATION :: COMMAND :: RELEASE HOLD", func() {
 				remaining, _ := money.NewMoney(750, money.BRL)
 				instruction := &hold.Instruction{ID: "hold-1", Requested: allocated, Allocated: allocated, Pending: pending, Released: alreadyReleased, Status: hold.StatusAllocated}
 				repo := &holdRepositoryFake{byID: instruction}
-				sut := command.NewReleaseHold(holdUOW{}, repo, &releaseOutboxFake{})
+				sut := command.NewReleaseHold(holdUOW{}, repo, &releaseOutboxFake{}, adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{})
 
 				result, err := sut.Execute(context.Background(), dto.ReleaseHoldInput{HoldID: "hold-1", IdempotencyKey: "release-final", AuthorizationReference: "auth-final", Amount: remaining})
 
@@ -207,7 +264,7 @@ var _ = Describe("INTERNAL :: APPLICATION :: COMMAND :: RELEASE HOLD", func() {
 				input := dto.ReleaseHoldInput{HoldID: "hold-1", IdempotencyKey: "release-1", AuthorizationReference: "auth-1", Amount: amount}
 				instruction := &hold.Instruction{ID: "hold-1", AccountID: "account-1", Currency: "BRL", Origin: "system", Reference: "ref", Type: hold.Judicial, Requested: allocated, Allocated: allocated, Pending: zero, Released: zero, Status: hold.StatusAllocated}
 				repo := &holdRepositoryFake{byID: instruction}
-				sut := command.NewReleaseHold(holdUOW{}, repo, &releaseOutboxFake{})
+				sut := command.NewReleaseHold(holdUOW{}, repo, &releaseOutboxFake{}, adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{})
 				_, err := sut.Execute(context.Background(), input)
 				Expect(err).NotTo(HaveOccurred())
 				stored := repo.savedRelease
@@ -225,7 +282,7 @@ var _ = Describe("INTERNAL :: APPLICATION :: COMMAND :: RELEASE HOLD", func() {
 				amount, _ := money.NewMoney(400, money.BRL)
 				input := dto.ReleaseHoldInput{HoldID: "hold-1", IdempotencyKey: "release-1", AuthorizationReference: "auth-1", Amount: amount}
 				repo := &holdRepositoryFake{release: &hold.Release{RequestFingerprint: "different"}}
-				sut := command.NewReleaseHold(holdUOW{}, repo, &releaseOutboxFake{})
+				sut := command.NewReleaseHold(holdUOW{}, repo, &releaseOutboxFake{}, adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{})
 
 				result, err := sut.Execute(context.Background(), input)
 
@@ -237,7 +294,7 @@ var _ = Describe("INTERNAL :: APPLICATION :: COMMAND :: RELEASE HOLD", func() {
 				zero, _ := money.NewMoney(0, money.BRL)
 				amount, _ := money.NewMoney(1001, money.BRL)
 				instruction := &hold.Instruction{ID: "hold-1", Requested: allocated, Allocated: allocated, Pending: zero, Released: zero, Status: hold.StatusAllocated}
-				sut := command.NewReleaseHold(holdUOW{}, &holdRepositoryFake{byID: instruction}, &releaseOutboxFake{})
+				sut := command.NewReleaseHold(holdUOW{}, &holdRepositoryFake{byID: instruction}, &releaseOutboxFake{}, adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{})
 
 				result, err := sut.Execute(context.Background(), dto.ReleaseHoldInput{HoldID: "hold-1", IdempotencyKey: "release-1", AuthorizationReference: "auth-1", Amount: amount})
 
