@@ -24,7 +24,7 @@ func observeHoldCommand(
 	metrics.RecordCommandDuration(commandName, float64(time.Since(started).Milliseconds()))
 	if commandErr != nil {
 		span.RecordError(commandErr)
-		if errors.Is(commandErr, hold.ErrHoldConflict) || errors.Is(commandErr, hold.ErrReleaseConflict) {
+		if errors.Is(commandErr, hold.ErrHoldConflict) || errors.Is(commandErr, hold.ErrReleaseConflict) || errors.Is(commandErr, hold.ErrDecisionConflict) {
 			state = "conflict"
 			metrics.RecordIdempotencyTotal("conflict")
 		} else {
