@@ -241,6 +241,10 @@ components:
           description: Moeda da conta.
           enum: [BRL, USD, EUR]
           example: "BRL"
+        holds_eligible:
+          type: boolean
+          description: Habilita avaliação de bloqueios para esta conta na criação. O padrão é false.
+          default: false
 
     AccountResponse:
       type: object

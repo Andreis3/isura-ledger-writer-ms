@@ -321,6 +321,7 @@ var _ = Describe("INTEGRATION :: INFRA :: POSTGRES :: TRANSACTION REPOSITORY", f
 				repository.NewOutBoxRepository(pool),
 				adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{},
 				application.DefaultMaxTransactionEntries,
+				repository.NewHoldRepository(pool),
 			)
 			results := make(chan *dto.CreateTransactionOutput, 2)
 			errorsCh := make(chan error, 2)

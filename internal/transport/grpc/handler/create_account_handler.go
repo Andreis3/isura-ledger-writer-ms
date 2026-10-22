@@ -41,6 +41,7 @@ func (h *CreateAccountHandler) Handle(ctx context.Context, req *pb.CreateAccount
 		AccountType:       string(h.AccountTypeTranslate(req)),
 		BalancePolicy:     string(h.BalancePolicyTranslate(req)),
 		Currency:          string(h.CurrencyTranslate(req)),
+		// The protobuf contract does not expose hold eligibility; it remains false by default.
 	}
 
 	response, err := h.useCase.Execute(ctx, input)

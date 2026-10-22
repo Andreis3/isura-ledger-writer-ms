@@ -134,13 +134,23 @@ Account {
 
 `internal/domain/hold` models restrictions on the availability of funds separately from the account's status and accounting entries. It recognizes `JUDICIAL`, `REGULATORY`, `GUARANTEE`, `CONTRACTUAL`, and `OPERATIONAL` as declared hold types; these labels do not establish legal validity or authority.
 
-The package provides a pure evaluator for a caller-supplied snapshot: eligible funds, active allocations, new requests, and an explicitly versioned operational policy. It subtracts existing active allocations before evaluating requests and returns the requested, allocated, and pending amounts with a status, policy version, conflict IDs, and reason. It does not change account status, create a debit or transfer, persist a hold, or coordinate concurrent evaluations across snapshots.
+The package provides a pure evaluator for a caller-supplied snapshot: eligible funds, active allocations, new requests, and an explicitly versioned operational policy. It subtracts existing active allocations before evaluating requests and returns the requested, allocated, and pending amounts with a status, policy version, conflict IDs, and reason. The PostgreSQL commands persist decisions, history and Outbox records in the same Unit of Work.
 
 The caller must determine legal and business eligibility—including applicable guarantees and restrictions—before passing `EligibleFunds`. The evaluator treats that amount as numerically eligible; it does not perform the legal eligibility assessment.
 
 `Policy.TypeOrder` is an operational order, not a universal legal priority. A request whose type is absent from the configured order always receives `PENDING_REVIEW`, even when the numeric funds are sufficient; missing configuration is not authorization. Unresolved competition also goes to review rather than being broken by request ID or date. Duplicate request IDs and duplicate active allocation IDs make the snapshot invalid.
 
-`HoldDecision` is a returned value, not an immutable object: callers can modify its exported fields. The evaluator does not mutate inputs or previously returned decisions, and it creates independent conflict ID slices. Persisting decisions for a durable audit history is the responsibility of a later integration.
+`HoldDecision` is a returned value, not an immutable object: callers can modify its exported fields. The evaluator does not mutate inputs or previously returned decisions, and it creates independent conflict ID slices. Persisted commands record decisions in `hold_history`.
+
+#### Account eligibility and pending review
+
+`holds_eligible` defaults to `false`. The REST account creation input can explicitly set it to `true`; the gRPC contract currently leaves it false. Eligibility is established at account creation and there is no normal account update operation that can turn it off. Any future eligibility change must be introduced as a dedicated authorized command that checks for effective allocations and writes an immutable audit record in the same UoW. Direct database updates bypass this application guarantee and are not an approved operating procedure.
+
+`PENDING_REVIEW` holds do not reserve funds. Recovery is currently an operational follow-up: inspect the hold and its `hold_history` reason/conflict IDs; after a missing policy is configured, submit a new authorized instruction with a new identity. The original instruction remains auditable and is not silently promoted. If the recorded reason is account ineligibility, the current API has no transition to enable that existing account, so the instruction remains pending until a dedicated authorized eligibility/review command is delivered. That command must check effective allocations and append an immutable audit record in the same UoW before it can enable or resolve an account. A dedicated review/resolution command is future work.
+
+#### Hold and posting concurrency
+
+Hold creation, release and transaction posting run in PostgreSQL `SERIALIZABLE` Unit of Work transactions and use the same ledger state and hold repository. Serialization/deadlock conflicts are retried up to five times with bounded backoff; exhausted retries return a transaction conflict, so clients may retry the identical business request with its same idempotency key. The repository read and ledger writes are transaction-scoped. This is the current protocol, not a proof for every interleaving: the real PostgreSQL race tests for hold versus debit, concurrent holds and release versus debit are acceptance evidence and must remain enabled. Sustained hot-account contention can exhaust retries.
 
 ### OutboxEvent — Aggregate
 

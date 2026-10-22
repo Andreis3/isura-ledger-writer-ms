@@ -21,6 +21,7 @@ var _ = Describe("INTERNAL :: APPLICATION :: DTO :: ACCOUNT MASK", func() {
 					AccountType:       "ASSET",
 					BalancePolicy:     "BALANCE_NON_NEGATIVE",
 					Currency:          "BRL",
+					HoldsEligible:     true,
 				}
 
 				// Act (When)
@@ -32,6 +33,7 @@ var _ = Describe("INTERNAL :: APPLICATION :: DTO :: ACCOUNT MASK", func() {
 				Expect(account.AccountNumber).To(Equal(input.AccountNumber))
 				Expect(string(account.Currency)).To(Equal(input.Currency))
 				Expect(string(account.BalancePolicy)).To(Equal(input.BalancePolicy))
+				Expect(account.HoldsEligible).To(BeTrue())
 
 				Expect(dto.MaskTotal(input.AccountNumber)).To(Equal("**********"))
 				Expect(dto.MaskMiddleVisible("1234")).To(Equal("******"))

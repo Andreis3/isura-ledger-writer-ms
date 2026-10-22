@@ -44,14 +44,10 @@ func NewCreateTransaction(
 	log application.Logger,
 	metrics application.Metrics,
 	maxEntries int,
-	holdRepositories ...domainhold.Repository,
+	holdRepository domainhold.Repository,
 ) *CreateTransaction {
 	if maxEntries <= 0 {
 		maxEntries = application.DefaultMaxTransactionEntries
-	}
-	var holds domainhold.Repository
-	if len(holdRepositories) > 0 {
-		holds = holdRepositories[0]
 	}
 	return &CreateTransaction{
 		uow:                   uow,
@@ -62,7 +58,7 @@ func NewCreateTransaction(
 		log:                   log,
 		metrics:               metrics,
 		maxEntries:            maxEntries,
-		holdRepository:        holds,
+		holdRepository:        holdRepository,
 	}
 }
 
@@ -194,7 +190,7 @@ func (c *CreateTransaction) persistNewTransaction(
 
 func (c *CreateTransaction) validateAvailableFunds(ctx context.Context, entries []*transaction.Entry, accounts []*account.Account) error {
 	if c.holdRepository == nil {
-		return nil
+		return errors.New("hold repository is required to validate available funds")
 	}
 	accountsByID := make(map[string]*account.Account, len(accounts))
 	for _, acc := range accounts {

@@ -109,6 +109,7 @@ var _ = Describe("CHAOS :: SIMULTANEOUS POSTGRES AND NATS OUTAGE", func() {
 				repository.NewTransactionRepository(p), repository.NewOutBoxRepository(p),
 				adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{},
 				adaptermocks.SilentMetricsMock{}, application.DefaultMaxTransactionEntries,
+				repository.NewHoldRepository(p),
 			)
 		}
 		created, err := create(db).Execute(runCtx, input)

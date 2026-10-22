@@ -615,7 +615,7 @@ func newCommandWithLimit(accounts *accountRepository, transactions *transactionR
 	if len(metrics) > 0 {
 		recorder = metrics[0]
 	}
-	return command.NewCreateTransaction(uow, accounts, transactions, outboxes, testTracer{}, testLogger{}, recorder, maxEntries)
+	return command.NewCreateTransaction(uow, accounts, transactions, outboxes, testTracer{}, testLogger{}, recorder, maxEntries, &effectiveHoldsFake{})
 }
 
 func newCommandWithHolds(accounts *accountRepository, transactions *transactionRepository, outboxes *outboxRepository, holds domainhold.Repository) *command.CreateTransaction {
