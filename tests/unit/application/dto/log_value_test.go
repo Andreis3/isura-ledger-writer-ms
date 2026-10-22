@@ -31,7 +31,8 @@ var _ = Describe("INTERNAL :: APPLICATION :: DTO :: LOG VALUE", func() {
 					Currency:          "BRL",
 				}
 				fields := logFields(input.LogValue())
-				Expect(fields).To(HaveLen(6))
+				Expect(fields).To(HaveLen(7))
+				Expect(fields["holds_eligible"].Bool()).To(BeFalse())
 				Expect(fields["account_number"].String()).NotTo(Equal(input.AccountNumber))
 				Expect(fields["account_number"].String()).NotTo(ContainSubstring(input.AccountNumber))
 				Expect(fields["tax_id"].String()).NotTo(Equal(input.TaxID))

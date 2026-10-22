@@ -64,6 +64,7 @@ var _ = Describe("CHAOS :: COMMIT ACK LOSS :: APPLICATION RECOVERY", func() {
 			repository.NewOutBoxRepository(pool),
 			adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{},
 			application.DefaultMaxTransactionEntries,
+			repository.NewHoldRepository(pool),
 		)
 		first, err := sut.Execute(ctx, input)
 		Expect(err).NotTo(HaveOccurred())

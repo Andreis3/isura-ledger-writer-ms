@@ -12,6 +12,7 @@ type CreateAccountInput struct {
 	TaxID             string `json:"tax_id"`
 	AccountType       string `json:"account_type"`
 	BalancePolicy     string `json:"balance_policy"`
+	HoldsEligible     bool   `json:"holds_eligible"`
 	Currency          string `json:"currency"`
 }
 
@@ -28,6 +29,7 @@ func (d *CreateAccountInput) CreateAccountFacade() (*account.Account, error) {
 		WithStatus().
 		WithType(d.AccountType).
 		WithBalancePolicy(d.BalancePolicy).
+		WithHoldsEligible(d.HoldsEligible).
 		WithCurrency(d.Currency).
 		WithCreatedAt().
 		WithUpdatedAt().
@@ -42,6 +44,7 @@ func (d CreateAccountInput) LogValue() slog.Value {
 		slog.String("account_number", MaskTotal(d.AccountNumber)),
 		slog.String("account_type", d.AccountType),
 		slog.String("balance_policy", d.BalancePolicy),
+		slog.Bool("holds_eligible", d.HoldsEligible),
 		slog.String("currency", d.Currency),
 	)
 }

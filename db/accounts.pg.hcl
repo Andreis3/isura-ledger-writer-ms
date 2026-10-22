@@ -22,18 +22,24 @@ table "accounts" {
   }
 
   column "status" {
-      type    = varchar(20)
-      null    = false
+    type = varchar(20)
+    null = false
   }
 
   column "type" {
-      type   = varchar(14)
-      null   = false
-    }
+    type = varchar(14)
+    null = false
+  }
 
   column "balance_policy" {
     type = varchar(32)
     null = false
+  }
+
+  column "holds_eligible" {
+    type    = bool
+    null    = false
+    default = false
   }
 
   column "currency" {
@@ -56,22 +62,22 @@ table "accounts" {
   }
 
   index "idx_account_number_currency" {
-      columns = [column.account_number, column.currency]
-      unique  = true
-    }
+    columns = [column.account_number, column.currency]
+    unique  = true
+  }
 
-    index "idx_account_external_currency" {
-      columns = [column.account_external_id, column.currency]
-      unique  = true
-    }
+  index "idx_account_external_currency" {
+    columns = [column.account_external_id, column.currency]
+    unique  = true
+  }
 
-    index "idx_tax_id" {
-      columns = [column.tax_id]
-    }
+  index "idx_tax_id" {
+    columns = [column.tax_id]
+  }
 
-    index "idx_account_type" {
-      columns = [column.type]
-    }
+  index "idx_account_type" {
+    columns = [column.type]
+  }
 
   check "accounts_balance_policy_valid" {
     expr = "balance_policy IN ('BALANCE_NON_NEGATIVE', 'BALANCE_UNRESTRICTED')"

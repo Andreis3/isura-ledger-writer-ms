@@ -53,6 +53,47 @@ var _ = Describe("INTERNAL :: DOMAIN :: HOLD :: HOLD", func() {
 		})
 	})
 
+	Describe("#Instruction", func() {
+		Context("success cases", func() {
+			It("should fingerprint immutable content and allow a bounded partial release", func() {
+				requested := mustMoney(100, money.BRL)
+				instruction := hold.Instruction{ID: "h1", AccountID: "a1", Currency: "BRL", Origin: "issuer", Reference: "ref-1", Type: hold.Judicial, Requested: requested, Allocated: mustMoney(80, money.BRL), Pending: mustMoney(20, money.BRL), Released: mustMoney(0, money.BRL), Status: hold.StatusPartiallyAllocated}
+				fingerprint := instruction.Fingerprint()
+
+				Expect(instruction.Validate()).To(Succeed())
+				Expect(instruction.Identity()).To(Equal("issuer:ref-1"))
+				Expect(fingerprint).To(HaveLen(64))
+				Expect(instruction.Release(mustMoney(30, money.BRL))).To(Succeed())
+				Expect(instruction.Released.Amount()).To(Equal(int64(30)))
+				Expect(instruction.Status).To(Equal(hold.StatusPartiallyAllocated))
+			})
+
+			It("should apply an allocation decision while keeping pending funds unreserved", func() {
+				instruction := hold.Instruction{ID: "h1", AccountID: "a1", Currency: "BRL", Origin: "issuer", Reference: "ref-1", Type: hold.Judicial, Requested: mustMoney(100, money.BRL), Released: mustMoney(0, money.BRL)}
+				decision := hold.HoldDecision{RequestID: "h1", Requested: mustMoney(100, money.BRL), Allocated: mustMoney(0, money.BRL), Pending: mustMoney(100, money.BRL), Status: hold.PendingReview}
+
+				Expect(instruction.ApplyDecision(decision)).To(Succeed())
+				Expect(instruction.Validate()).To(Succeed())
+				Expect(instruction.Status).To(Equal(hold.StatusPendingReview))
+			})
+		})
+
+		Context("error cases", func() {
+			It("should reject release beyond the remaining allocation and mismatched currencies", func() {
+				instruction := hold.Instruction{Allocated: mustMoney(80, money.BRL), Released: mustMoney(30, money.BRL)}
+				Expect(instruction.Release(mustMoney(51, money.BRL))).To(MatchError(ContainSubstring("exceeds retained")))
+				Expect(instruction.Release(mustMoney(1, money.USD))).To(MatchError(hold.ErrInvalidRelease))
+			})
+
+			It("should reject inconsistent persisted amounts and mismatched decisions", func() {
+				instruction := hold.Instruction{ID: "h1", AccountID: "a1", Origin: "issuer", Reference: "ref-1", Type: hold.Judicial, Requested: mustMoney(100, money.BRL), Allocated: mustMoney(80, money.BRL), Pending: mustMoney(10, money.BRL), Released: mustMoney(0, money.BRL), Status: hold.StatusPartiallyAllocated}
+				Expect(instruction.Validate()).To(HaveOccurred())
+				instruction.Pending = mustMoney(20, money.BRL)
+				Expect(instruction.ApplyDecision(hold.HoldDecision{RequestID: "other", Requested: mustMoney(100, money.BRL)})).To(HaveOccurred())
+			})
+		})
+	})
+
 	Describe("#ActiveAllocation.Validate", func() {
 		Context("success cases", func() {
 			It("should accept a nonnegative allocation with a valid currency", func() {

@@ -33,10 +33,11 @@ func (r *AccountRepository) Save(ctx context.Context, account *account.Account) 
               status,
               type,
               balance_policy,
+              holds_eligible,
               currency,
               created_at,
               updated_at)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`
 
 	accountModel := model.ToAccountModel(account)
 
@@ -48,6 +49,7 @@ func (r *AccountRepository) Save(ctx context.Context, account *account.Account) 
 		accountModel.Status,
 		accountModel.Type,
 		accountModel.BalancePolicy,
+		accountModel.HoldsEligible,
 		accountModel.Currency,
 		accountModel.CreatedAt,
 		accountModel.UpdatedAt,
@@ -75,6 +77,7 @@ func (r *AccountRepository) FindAccount(ctx context.Context, params criteria.Acc
             status,
             type,
             balance_policy,
+            holds_eligible,
             currency, 
             created_at, 
             updated_at 
@@ -91,6 +94,7 @@ func (r *AccountRepository) FindAccount(ctx context.Context, params criteria.Acc
 		&accountModel.Status,
 		&accountModel.Type,
 		&accountModel.BalancePolicy,
+		&accountModel.HoldsEligible,
 		&accountModel.Currency,
 		&accountModel.CreatedAt,
 		&accountModel.UpdatedAt,
