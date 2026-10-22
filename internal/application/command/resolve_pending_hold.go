@@ -230,7 +230,7 @@ func (c *ResolvePendingHold) Execute(ctx context.Context, input dto.ResolvePendi
 			Currency        string                `json:"currency"`
 			PolicyVersion   *string               `json:"policy_version"`
 		}{boxID.String(), 1, now, input.DecisionID, instruction.ID, instruction.AccountID, input.Action, instruction.Status,
-			input.RequestedAmount.Amount(), instruction.Allocated.Amount(), instruction.Pending.Amount(), instruction.Currency, optionalPolicyVersion(input.PolicyVersion)})
+			instruction.Requested.Amount(), instruction.Allocated.Amount(), instruction.Pending.Amount(), instruction.Currency, optionalPolicyVersion(input.PolicyVersion)})
 		if err != nil {
 			return err
 		}

@@ -106,6 +106,28 @@ var _ = Describe("INTERNAL :: APPLICATION :: COMMAND :: RESOLVE PENDING HOLD", f
 			})
 		})
 		Context("error cases", func() {
+			It("should reject a resolution without the required fields", func() {
+				ctx := security.WithPrincipal(context.Background(), security.Principal{Subject: "service-a", Permissions: []string{security.ResolveFundsHold}})
+				sut := command.NewResolvePendingHold(nil, nil, nil, nil, nil, nil,
+					adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{})
+
+				_, err := sut.Execute(ctx, dto.ResolvePendingHoldInput{})
+
+				Expect(err).To(MatchError(hold.ErrInvalidResolution))
+			})
+
+			It("should reject an unsupported resolution action", func() {
+				ctx := security.WithPrincipal(context.Background(), security.Principal{Subject: "service-a", Permissions: []string{security.ResolveFundsHold}})
+				sut := command.NewResolvePendingHold(resolutionUOW{}, nil, nil, nil, nil, nil,
+					adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{})
+				input := dto.ResolvePendingHoldInput{HoldID: "hold-id", DecisionID: "decision-id", AuthorizationReference: "auth-ref",
+					Reason: "reviewed", ExpectedVersion: 1, Action: "unsupported"}
+
+				_, err := sut.Execute(ctx, input)
+
+				Expect(err).To(MatchError(hold.ErrInvalidResolution))
+			})
+
 			It("should require an authenticated principal with resolution permission", func() {
 				sut := command.NewResolvePendingHold(nil, nil, nil, nil, nil, nil,
 					adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{})
@@ -145,6 +167,7 @@ var _ = Describe("INTERNAL :: APPLICATION :: COMMAND :: RESOLVE PENDING HOLD", f
 				Expect(json.Unmarshal(box.saved.Payload, &payload)).To(Succeed())
 				Expect(payload["event_version"]).To(Equal(float64(1)))
 				Expect(payload["decision_id"]).To(Equal("decision-id"))
+				Expect(payload["requested_amount"]).To(Equal(float64(500)))
 				Expect(payload).NotTo(HaveKey("reason"))
 				Expect(payload).NotTo(HaveKey("authorization_reference"))
 				Expect(payload).NotTo(HaveKey("authorized_by"))
