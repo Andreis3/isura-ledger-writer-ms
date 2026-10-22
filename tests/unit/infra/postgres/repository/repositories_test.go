@@ -252,7 +252,7 @@ var _ = Describe("INTERNAL :: INFRA :: POSTGRES :: REPOSITORY :: ACCOUNT", func(
 				// Assert.
 				Expect(err).NotTo(HaveOccurred())
 				Expect(db.Queries[0]).To(ContainSubstring("INSERT INTO"))
-				Expect(db.Arguments[0]).To(HaveLen(10))
+				Expect(db.Arguments[0]).To(HaveLen(11))
 			})
 		})
 
@@ -299,6 +299,7 @@ var _ = Describe("INTERNAL :: INFRA :: POSTGRES :: REPOSITORY :: ACCOUNT", func(
 					pgtype.Text{String: string(account.StatusActive), Valid: true},
 					pgtype.Text{String: string(account.Asset), Valid: true},
 					pgtype.Text{String: string(account.BalanceUnrestricted), Valid: true},
+					pgtype.Bool{Bool: false, Valid: true},
 					pgtype.Text{String: string(money.BRL), Valid: true},
 					pgtype.Timestamptz{Time: created, Valid: true},
 					pgtype.Timestamptz{Time: created.Add(time.Hour), Valid: true},

@@ -14,6 +14,7 @@ type Account struct {
 	Status            pgtype.Text
 	Type              pgtype.Text
 	BalancePolicy     pgtype.Text
+	HoldsEligible     pgtype.Bool
 	Currency          pgtype.Text
 	CreatedAt         pgtype.Timestamptz
 	UpdatedAt         pgtype.Timestamptz
@@ -49,6 +50,7 @@ func ToAccountModel(entity *account.Account) Account {
 			String: string(entity.BalancePolicy),
 			Valid:  true,
 		},
+		HoldsEligible: pgtype.Bool{Bool: entity.HoldsEligible, Valid: true},
 		Currency: pgtype.Text{
 			String: string(entity.Currency),
 			Valid:  true,
@@ -74,6 +76,7 @@ func ToAccountDomain(model Account) (*account.Account, error) {
 		WithStatus(model.Status.String).
 		WithType(model.Type.String).
 		WithBalancePolicy(model.BalancePolicy.String).
+		WithHoldsEligible(model.HoldsEligible.Bool).
 		WithCurrency(model.Currency.String).
 		WithCreatedAt(model.CreatedAt.Time).
 		WithUpdatedAt(model.UpdatedAt.Time).
