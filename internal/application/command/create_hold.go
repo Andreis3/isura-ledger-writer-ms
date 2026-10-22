@@ -70,7 +70,14 @@ func (c *CreateHold) Execute(ctx context.Context, input dto.CreateHoldInput) (*C
 		if acc.Currency != requested.Currency() {
 			return money.ErrCurrencyMismatch
 		}
-		var decision hold.HoldDecision
+		zero, err := money.NewMoney(0, requested.Currency())
+		if err != nil {
+			return err
+		}
+		decision := hold.HoldDecision{
+			RequestID: instruction.ID, Requested: requested, Allocated: zero, Pending: requested,
+			Status: hold.PendingReview, Reason: "HOLD_NOT_ELIGIBLE",
+		}
 		if acc.HoldsEligible {
 			var policy hold.AllocationPolicy
 			found := false
@@ -109,10 +116,12 @@ func (c *CreateHold) Execute(ctx context.Context, input dto.CreateHoldInput) (*C
 					return err
 				}
 				decision = decisions[0]
-				if err := instruction.ApplyDecision(decision); err != nil {
-					return err
-				}
+			} else {
+				decision.Reason = "HOLD_POLICY_NOT_CONFIGURED"
 			}
+		}
+		if err := instruction.ApplyDecision(decision); err != nil {
+			return err
 		}
 		if err := c.holds.Save(txCtx, instruction); err != nil {
 			return err
@@ -122,7 +131,7 @@ func (c *CreateHold) Execute(ctx context.Context, input dto.CreateHoldInput) (*C
 		if err != nil {
 			return err
 		}
-		history := hold.History{ID: historyID.String(), HoldID: instruction.ID, EventType: "DECISION_RECORDED", Requested: instruction.Requested, AllocatedDelta: allocatedDelta, Pending: instruction.Pending, PolicyVersion: instruction.PolicyVersion, CreatedAt: time.Now().UTC()}
+		history := hold.History{ID: historyID.String(), HoldID: instruction.ID, EventType: "DECISION_RECORDED", Requested: instruction.Requested, AllocatedDelta: allocatedDelta, Pending: instruction.Pending, ReleasedDelta: zero, PolicyVersion: instruction.PolicyVersion, CreatedAt: time.Now().UTC()}
 		if decision.Reason != "" {
 			history.Reason = decision.Reason
 			history.ConflictIDs = append([]string(nil), decision.ConflictIDs...)

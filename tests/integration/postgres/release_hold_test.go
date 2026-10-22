@@ -18,6 +18,25 @@ import (
 )
 
 var _ = Describe("INTERNAL :: APPLICATION :: COMMAND :: RELEASE HOLD (POSTGRES)", func() {
+	It("should leave transactions and entries unchanged when a hold is registered and released", func() {
+		accountID := insertAccount(ctx, pool)
+		instruction := allocatedHold(accountID, "accounting-invariant", "reference-"+newIDV7())
+		holdRepo := repository.NewHoldRepository(pool)
+		Expect(holdRepo.Save(ctx, instruction)).To(Succeed())
+		sut := command.NewReleaseHold(uow.NewUnitOfWork(pool, nil), holdRepo, repository.NewOutBoxRepository(pool))
+		input := dto.ReleaseHoldInput{HoldID: instruction.ID, IdempotencyKey: "release-" + newIDV7(), AuthorizationReference: "auth-ref", Amount: amount(300, money.BRL)}
+		_, err := sut.Execute(ctx, input)
+		Expect(err).NotTo(HaveOccurred())
+		var transactions, entries int
+		Expect(pool.QueryRow(ctx, `SELECT count(*) FROM transactions WHERE id IN (SELECT transaction_id FROM entries WHERE account_id=$1)`, accountID).Scan(&transactions)).To(Succeed())
+		Expect(pool.QueryRow(ctx, `SELECT count(*) FROM entries WHERE account_id=$1`, accountID).Scan(&entries)).To(Succeed())
+		Expect(transactions).To(BeZero())
+		Expect(entries).To(BeZero())
+		loaded, err := holdRepo.FindByID(ctx, instruction.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(loaded.Released.Amount()).To(Equal(int64(300)))
+	})
+
 	It("should apply one release for concurrent retries with the same idempotency key", func() {
 		accountID := insertAccount(ctx, pool)
 		instruction := allocatedHold(accountID, "release-command", "reference-"+newIDV7())
