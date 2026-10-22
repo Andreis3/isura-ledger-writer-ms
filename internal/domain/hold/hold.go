@@ -18,9 +18,14 @@ const (
 	StatusPartiallyAllocated HoldStatus = "PARTIALLY_ALLOCATED"
 	StatusPendingReview      HoldStatus = "PENDING_REVIEW"
 	StatusReleased           HoldStatus = "RELEASED"
+	StatusRejected           HoldStatus = "REJECTED"
 )
 
-var ErrInvalidRelease = errors.New("invalid hold release")
+var (
+	ErrInvalidRelease    = errors.New("invalid hold release")
+	ErrHoldStateConflict = errors.New("hold state or version conflict")
+	ErrInvalidResolution = errors.New("invalid hold resolution")
+)
 
 // Instruction is the current persisted state of one idempotently identified hold.
 type Instruction struct {
@@ -29,6 +34,27 @@ type Instruction struct {
 	Requested, Allocated, Pending, Released    money.Money
 	Status                                     HoldStatus
 	PolicyVersion, RequestFingerprint          string
+	Version                                    uint64
+	AllowPartial                               bool
+}
+
+// ResolutionAction is an explicit operational decision for a pending hold.
+type ResolutionAction string
+
+const (
+	ActionAllocate          ResolutionAction = "ALLOCATE"
+	ActionPartiallyAllocate ResolutionAction = "PARTIALLY_ALLOCATE"
+	ActionReject            ResolutionAction = "REJECT"
+	ActionKeepPending       ResolutionAction = "KEEP_PENDING"
+)
+
+// Resolution carries the values and optimistic concurrency preconditions for a decision.
+type Resolution struct {
+	Action          ResolutionAction
+	ExpectedStatus  HoldStatus
+	ExpectedVersion uint64
+	Allocated       money.Money
+	PolicyVersion   string
 }
 
 // Identity returns the idempotency identity shared by an origin and reference.
@@ -71,8 +97,12 @@ func (i Instruction) Validate() error {
 			return fmt.Errorf("%w: invalid partially allocated status", ErrInvalidHold)
 		}
 	case StatusPendingReview:
-		if i.Allocated.IsPositive() {
+		if i.Allocated.IsPositive() || !i.Released.IsZero() {
 			return fmt.Errorf("%w: pending instruction cannot retain funds", ErrInvalidHold)
+		}
+	case StatusRejected:
+		if i.Allocated.IsPositive() || !i.Released.IsZero() {
+			return fmt.Errorf("%w: rejected instruction cannot retain or release funds", ErrInvalidHold)
 		}
 	case StatusReleased:
 		if !i.Allocated.IsPositive() || !i.Released.Equal(i.Allocated) {
@@ -81,6 +111,62 @@ func (i Instruction) Validate() error {
 	default:
 		return fmt.Errorf("%w: invalid status", ErrInvalidHold)
 	}
+	return nil
+}
+
+// Resolve applies an explicit decision to a pending instruction using optimistic concurrency.
+func (i *Instruction) Resolve(resolution Resolution) error {
+	if i == nil {
+		return fmt.Errorf("%w: instruction is required", ErrInvalidResolution)
+	}
+	if i.Status != StatusPendingReview || resolution.ExpectedStatus != i.Status || resolution.ExpectedVersion != i.Version {
+		return ErrHoldStateConflict
+	}
+	if i.Version == ^uint64(0) {
+		return fmt.Errorf("%w: version exhausted", ErrInvalidResolution)
+	}
+	zero, err := money.NewMoney(0, i.Requested.Currency())
+	if err != nil {
+		return fmt.Errorf("%w: invalid requested currency: %w", ErrInvalidResolution, err)
+	}
+	allocated := resolution.Allocated
+	if !allocated.Currency().IsValid() || allocated.Currency() != i.Requested.Currency() || allocated.IsNegative() || allocated.Amount() > i.Requested.Amount() {
+		return fmt.Errorf("%w: allocated amount must be within the requested amount and currency", ErrInvalidResolution)
+	}
+	status := StatusPendingReview
+	switch resolution.Action {
+	case ActionAllocate:
+		if !allocated.Equal(i.Requested) {
+			return fmt.Errorf("%w: ALLOCATE must allocate the requested amount in full", ErrInvalidResolution)
+		}
+		status = StatusAllocated
+	case ActionPartiallyAllocate:
+		if !i.AllowPartial || !allocated.IsPositive() || allocated.Equal(i.Requested) {
+			return fmt.Errorf("%w: partial allocation is not permitted or is not partial", ErrInvalidResolution)
+		}
+		status = StatusPartiallyAllocated
+	case ActionReject:
+		if !allocated.IsZero() {
+			return fmt.Errorf("%w: REJECT cannot allocate funds", ErrInvalidResolution)
+		}
+		status = StatusRejected
+	case ActionKeepPending:
+		if !allocated.IsZero() {
+			return fmt.Errorf("%w: KEEP_PENDING cannot allocate funds", ErrInvalidResolution)
+		}
+	default:
+		return fmt.Errorf("%w: unknown action %q", ErrInvalidResolution, resolution.Action)
+	}
+	pending, err := i.Requested.Subtract(allocated)
+	if err != nil {
+		return fmt.Errorf("%w: calculate pending amount: %w", ErrInvalidResolution, err)
+	}
+	if status == StatusRejected || status == StatusPendingReview {
+		allocated, pending = zero, i.Requested
+	}
+	i.Allocated, i.Pending, i.Released = allocated, pending, zero
+	i.Status, i.PolicyVersion = status, resolution.PolicyVersion
+	i.Version++
 	return nil
 }
 
