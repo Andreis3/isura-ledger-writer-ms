@@ -5,6 +5,7 @@ package command_test
 
 import (
 	"context"
+	"errors"
 
 	"github.com/andreis3/isura-ledger-ms/internal/application"
 	"github.com/andreis3/isura-ledger-ms/internal/application/command"
@@ -29,65 +30,86 @@ func (u holdUOW) WithRetryableTransaction(ctx context.Context, fn func(context.C
 
 type holdRepositoryFake struct {
 	hold.Repository
-	existing     *hold.Instruction
-	saved        *hold.Instruction
-	byID         *hold.Instruction
-	release      *hold.Release
-	savedRelease *hold.Release
-	history      []hold.History
+	existing                                                      *hold.Instruction
+	saved                                                         *hold.Instruction
+	byID                                                          *hold.Instruction
+	release                                                       *hold.Release
+	savedRelease                                                  *hold.Release
+	history                                                       []hold.History
+	identityErr, saveErr, historyErr, findReleaseErr, findByIDErr error
+	effectiveErr, updateErr, saveReleaseErr                       error
+	effective                                                     []hold.Instruction
 }
 
 func (r *holdRepositoryFake) FindByIdentity(context.Context, string, string) (*hold.Instruction, error) {
-	return r.existing, nil
+	return r.existing, r.identityErr
 }
 
 func (r *holdRepositoryFake) Save(_ context.Context, instruction *hold.Instruction) error {
 	r.saved = instruction
-	return nil
+	return r.saveErr
 }
 func (r *holdRepositoryFake) SaveHistory(_ context.Context, history hold.History) error {
+	if r.historyErr != nil {
+		return r.historyErr
+	}
 	r.history = append(r.history, history)
 	return nil
 }
-func (*holdRepositoryFake) FindEffectiveByAccount(context.Context, string, money.Currency) ([]hold.Instruction, error) {
-	return nil, nil
+func (r *holdRepositoryFake) FindEffectiveByAccount(context.Context, string, money.Currency) ([]hold.Instruction, error) {
+	return r.effective, r.effectiveErr
 }
 func (r *holdRepositoryFake) FindRelease(context.Context, string) (*hold.Release, error) {
-	return r.release, nil
+	return r.release, r.findReleaseErr
 }
 func (r *holdRepositoryFake) FindByID(context.Context, string) (*hold.Instruction, error) {
-	return r.byID, nil
+	return r.byID, r.findByIDErr
 }
 func (r *holdRepositoryFake) Update(_ context.Context, instruction *hold.Instruction) error {
 	r.byID = instruction
-	return nil
+	return r.updateErr
 }
 func (r *holdRepositoryFake) SaveRelease(_ context.Context, release hold.Release) error {
 	r.savedRelease = &release
-	return nil
+	return r.saveReleaseErr
 }
 
 type holdAccountRepoFake struct {
 	account.Repository
 	value *account.Account
+	err   error
 }
 
 func (r holdAccountRepoFake) FindAccount(context.Context, criteria.AccountCriteria) (*account.Account, error) {
-	return r.value, nil
+	return r.value, r.err
 }
 
 type holdTransactionRepoFake struct {
 	transaction.Repository
 	balance int64
+	err     error
 }
 
 func (r holdTransactionRepoFake) FindLatestLedgerState(context.Context, string) (int64, int64, error) {
-	return 0, r.balance, nil
+	return 0, r.balance, r.err
 }
 
-type holdOutboxRepoFake struct{ outbox.Repository }
+type holdTransactionRepoSpy struct {
+	holdTransactionRepoFake
+	calls int
+}
 
-func (holdOutboxRepoFake) Save(context.Context, *outbox.Outbox) error { return nil }
+func (r *holdTransactionRepoSpy) FindLatestLedgerState(ctx context.Context, accountID string) (int64, int64, error) {
+	r.calls++
+	return r.holdTransactionRepoFake.FindLatestLedgerState(ctx, accountID)
+}
+
+type holdOutboxRepoFake struct {
+	outbox.Repository
+	err error
+}
+
+func (r holdOutboxRepoFake) Save(context.Context, *outbox.Outbox) error { return r.err }
 
 type releaseOutboxFake struct {
 	holdOutboxRepoFake
@@ -96,16 +118,17 @@ type releaseOutboxFake struct {
 
 func (r *releaseOutboxFake) Save(_ context.Context, item *outbox.Outbox) error {
 	r.saved = item
-	return nil
+	return r.holdOutboxRepoFake.err
 }
 
 type holdPolicyFake struct {
 	found  bool
 	policy hold.AllocationPolicy
+	err    error
 }
 
 func (r holdPolicyFake) PolicyFor(context.Context, account.Account, hold.HoldType) (hold.AllocationPolicy, bool, error) {
-	return r.policy, r.found, nil
+	return r.policy, r.found, r.err
 }
 
 type recordingHoldMetrics struct {
@@ -192,8 +215,203 @@ var _ = Describe("INTERNAL :: APPLICATION :: COMMAND :: CREATE HOLD", func() {
 				Expect(metrics.idempotencyResults).To(Equal([]string{"new"}))
 				Expect(metrics.durationCalls).To(Equal(1))
 			})
+			It("should allocate an eligible request when the configured policy and balance allow it", func() {
+				requested, _ := money.NewMoney(500, money.BRL)
+				accountID, err := entity.NewIDV7()
+				Expect(err).NotTo(HaveOccurred())
+				repo := &holdRepositoryFake{}
+				policy := hold.AllocationPolicy{Version: "policy-v1", TypeOrder: []hold.HoldType{hold.Judicial}, UnresolvedConflict: hold.PendingReviewOnConflict}
+				sut := command.NewCreateHold(holdUOW{}, holdAccountRepoFake{value: &account.Account{ID: accountID, Currency: money.BRL, HoldsEligible: true}}, holdTransactionRepoFake{balance: 1000}, repo, holdPolicyFake{found: true, policy: policy}, holdOutboxRepoFake{}, adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{})
+				input := dto.CreateHoldInput{AccountID: accountID.String(), Currency: string(money.BRL), Origin: "origin", Reference: "funded", Type: hold.Judicial, Requested: requested}
+
+				result, err := sut.Execute(context.Background(), input)
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result.Instruction.Status).To(Equal(hold.StatusAllocated))
+				Expect(result.Instruction.Allocated).To(Equal(requested))
+				Expect(result.Instruction.PolicyVersion).To(Equal("policy-v1"))
+			})
+			It("should leave an eligible request pending when the balance is insufficient and partial allocation is disabled", func() {
+				requested, _ := money.NewMoney(500, money.BRL)
+				accountID, err := entity.NewIDV7()
+				Expect(err).NotTo(HaveOccurred())
+				repo := &holdRepositoryFake{}
+				policy := hold.AllocationPolicy{Version: "policy-v1", TypeOrder: []hold.HoldType{hold.Judicial}, UnresolvedConflict: hold.PendingReviewOnConflict}
+				sut := command.NewCreateHold(holdUOW{}, holdAccountRepoFake{value: &account.Account{ID: accountID, Currency: money.BRL, HoldsEligible: true}}, holdTransactionRepoFake{balance: 100}, repo, holdPolicyFake{found: true, policy: policy}, holdOutboxRepoFake{}, adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{})
+				input := dto.CreateHoldInput{AccountID: accountID.String(), Currency: string(money.BRL), Origin: "origin", Reference: "insufficient", Type: hold.Judicial, Requested: requested}
+
+				result, err := sut.Execute(context.Background(), input)
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result.Instruction.Status).To(Equal(hold.StatusPendingReview))
+				Expect(result.Instruction.Allocated.Amount()).To(BeZero())
+				Expect(result.Instruction.Pending).To(Equal(requested))
+				Expect(repo.history[0].Reason).To(Equal("ELIGIBLE_FUNDS_INSUFFICIENT"))
+			})
+			It("should partially allocate only funds not already retained by another hold", func() {
+				requested, _ := money.NewMoney(500, money.BRL)
+				allocated, _ := money.NewMoney(100, money.BRL)
+				released, _ := money.NewMoney(60, money.BRL)
+				accountID, err := entity.NewIDV7()
+				Expect(err).NotTo(HaveOccurred())
+				repo := &holdRepositoryFake{effective: []hold.Instruction{{ID: "existing", Type: hold.Regulatory, Allocated: allocated, Released: released}}}
+				policy := hold.AllocationPolicy{Version: "policy-v1", TypeOrder: []hold.HoldType{hold.Judicial}, AllowPartial: true, UnresolvedConflict: hold.PendingReviewOnConflict}
+				sut := command.NewCreateHold(holdUOW{}, holdAccountRepoFake{value: &account.Account{ID: accountID, Currency: money.BRL, HoldsEligible: true}}, holdTransactionRepoFake{balance: 200}, repo, holdPolicyFake{found: true, policy: policy}, holdOutboxRepoFake{}, adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{})
+				input := dto.CreateHoldInput{AccountID: accountID.String(), Currency: string(money.BRL), Origin: "origin", Reference: "partial", Type: hold.Judicial, Requested: requested}
+
+				result, err := sut.Execute(context.Background(), input)
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result.Instruction.Status).To(Equal(hold.StatusPartiallyAllocated))
+				Expect(result.Instruction.Allocated.Amount()).To(Equal(int64(160)))
+				Expect(result.Instruction.Pending.Amount()).To(Equal(int64(340)))
+			})
+			It("should persist an ineligible account request for review without reading its balance", func() {
+				requested, _ := money.NewMoney(500, money.BRL)
+				accountID, err := entity.NewIDV7()
+				Expect(err).NotTo(HaveOccurred())
+				repo := &holdRepositoryFake{}
+				transactions := &holdTransactionRepoSpy{}
+				sut := command.NewCreateHold(holdUOW{}, holdAccountRepoFake{value: &account.Account{ID: accountID, Currency: money.BRL}}, transactions, repo, nil, holdOutboxRepoFake{}, adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{})
+				input := dto.CreateHoldInput{AccountID: accountID.String(), Currency: string(money.BRL), Origin: "origin", Reference: "ineligible", Type: hold.Judicial, Requested: requested}
+
+				result, err := sut.Execute(context.Background(), input)
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result.Instruction.Status).To(Equal(hold.StatusPendingReview))
+				Expect(repo.history[0].Reason).To(Equal("HOLD_NOT_ELIGIBLE"))
+				Expect(transactions.calls).To(BeZero())
+			})
 		})
 		Context("error cases", func() {
+			It("should propagate an error while checking the instruction identity", func() {
+				requested, _ := money.NewMoney(500, money.BRL)
+				cause := errors.New("identity lookup failed")
+				repo := &holdRepositoryFake{identityErr: cause}
+				sut := newCreateHoldCommand(repo, nil, holdTransactionRepoFake{}, nil, holdOutboxRepoFake{})
+				input := dto.CreateHoldInput{AccountID: "account-1", Currency: string(money.BRL), Origin: "origin", Reference: "identity-error", Type: hold.Judicial, Requested: requested}
+
+				result, err := sut.Execute(context.Background(), input)
+
+				Expect(result).To(BeNil())
+				Expect(errors.Is(err, cause)).To(BeTrue())
+			})
+			It("should return account not found without persisting an instruction", func() {
+				requested, _ := money.NewMoney(500, money.BRL)
+				repo := &holdRepositoryFake{}
+				sut := newCreateHoldCommand(repo, nil, holdTransactionRepoFake{}, nil, holdOutboxRepoFake{})
+				input := dto.CreateHoldInput{AccountID: "missing", Currency: string(money.BRL), Origin: "origin", Reference: "missing-account", Type: hold.Judicial, Requested: requested}
+
+				result, err := sut.Execute(context.Background(), input)
+
+				Expect(result).To(BeNil())
+				Expect(err).To(MatchError(ContainSubstring(account.ErrAccountNotFound.Error())))
+				Expect(repo.saved).To(BeNil())
+			})
+			It("should return a currency mismatch when the hold currency differs from the account", func() {
+				requested, _ := money.NewMoney(500, money.BRL)
+				accountID, err := entity.NewIDV7()
+				Expect(err).NotTo(HaveOccurred())
+				repo := &holdRepositoryFake{}
+				sut := newCreateHoldCommand(repo, &account.Account{ID: accountID, Currency: money.USD}, holdTransactionRepoFake{}, nil, holdOutboxRepoFake{})
+				input := dto.CreateHoldInput{AccountID: accountID.String(), Currency: string(money.BRL), Origin: "origin", Reference: "currency", Type: hold.Judicial, Requested: requested}
+
+				result, err := sut.Execute(context.Background(), input)
+
+				Expect(result).To(BeNil())
+				Expect(err).To(MatchError(money.ErrCurrencyMismatch))
+			})
+			It("should return a policy provider error without persisting a hold", func() {
+				requested, _ := money.NewMoney(500, money.BRL)
+				accountID, err := entity.NewIDV7()
+				Expect(err).NotTo(HaveOccurred())
+				cause := errors.New("policy service unavailable")
+				repo := &holdRepositoryFake{}
+				sut := newCreateHoldCommand(repo, &account.Account{ID: accountID, Currency: money.BRL, HoldsEligible: true}, holdTransactionRepoFake{}, holdPolicyFake{err: cause}, holdOutboxRepoFake{})
+				input := dto.CreateHoldInput{AccountID: accountID.String(), Currency: string(money.BRL), Origin: "origin", Reference: "policy-error", Type: hold.Judicial, Requested: requested}
+
+				result, err := sut.Execute(context.Background(), input)
+
+				Expect(result).To(BeNil())
+				Expect(errors.Is(err, cause)).To(BeTrue())
+				Expect(repo.saved).To(BeNil())
+			})
+			It("should propagate ledger state lookup errors", func() {
+				requested, _ := money.NewMoney(500, money.BRL)
+				accountID, err := entity.NewIDV7()
+				Expect(err).NotTo(HaveOccurred())
+				cause := errors.New("ledger unavailable")
+				repo := &holdRepositoryFake{}
+				policy := hold.AllocationPolicy{Version: "policy-v1", TypeOrder: []hold.HoldType{hold.Judicial}, UnresolvedConflict: hold.PendingReviewOnConflict}
+				sut := newCreateHoldCommand(repo, &account.Account{ID: accountID, Currency: money.BRL, HoldsEligible: true}, holdTransactionRepoFake{err: cause}, holdPolicyFake{found: true, policy: policy}, holdOutboxRepoFake{})
+				input := dto.CreateHoldInput{AccountID: accountID.String(), Currency: string(money.BRL), Origin: "origin", Reference: "ledger-error", Type: hold.Judicial, Requested: requested}
+
+				result, err := sut.Execute(context.Background(), input)
+
+				Expect(result).To(BeNil())
+				Expect(errors.Is(err, cause)).To(BeTrue())
+			})
+			It("should propagate effective hold lookup errors", func() {
+				requested, _ := money.NewMoney(500, money.BRL)
+				accountID, err := entity.NewIDV7()
+				Expect(err).NotTo(HaveOccurred())
+				cause := errors.New("effective holds unavailable")
+				repo := &holdRepositoryFake{effectiveErr: cause}
+				policy := hold.AllocationPolicy{Version: "policy-v1", TypeOrder: []hold.HoldType{hold.Judicial}, UnresolvedConflict: hold.PendingReviewOnConflict}
+				sut := newCreateHoldCommand(repo, &account.Account{ID: accountID, Currency: money.BRL, HoldsEligible: true}, holdTransactionRepoFake{balance: 1000}, holdPolicyFake{found: true, policy: policy}, holdOutboxRepoFake{})
+				input := dto.CreateHoldInput{AccountID: accountID.String(), Currency: string(money.BRL), Origin: "origin", Reference: "active-error", Type: hold.Judicial, Requested: requested}
+
+				result, err := sut.Execute(context.Background(), input)
+
+				Expect(result).To(BeNil())
+				Expect(errors.Is(err, cause)).To(BeTrue())
+			})
+			It("should propagate an instruction insert error", func() {
+				requested, _ := money.NewMoney(500, money.BRL)
+				accountID, err := entity.NewIDV7()
+				Expect(err).NotTo(HaveOccurred())
+				cause := errors.New("hold insert failed")
+				repo := &holdRepositoryFake{saveErr: cause}
+				sut := newCreateHoldCommand(repo, &account.Account{ID: accountID, Currency: money.BRL}, holdTransactionRepoFake{}, nil, holdOutboxRepoFake{})
+				input := dto.CreateHoldInput{AccountID: accountID.String(), Currency: string(money.BRL), Origin: "origin", Reference: "insert-error", Type: hold.Judicial, Requested: requested}
+
+				result, err := sut.Execute(context.Background(), input)
+
+				Expect(result).To(BeNil())
+				Expect(errors.Is(err, cause)).To(BeTrue())
+			})
+			It("should return a history persistence error after saving the instruction", func() {
+				requested, _ := money.NewMoney(500, money.BRL)
+				accountID, err := entity.NewIDV7()
+				Expect(err).NotTo(HaveOccurred())
+				cause := errors.New("history write failed")
+				repo := &holdRepositoryFake{historyErr: cause}
+				sut := newCreateHoldCommand(repo, &account.Account{ID: accountID, Currency: money.BRL}, holdTransactionRepoFake{}, nil, holdOutboxRepoFake{})
+				input := dto.CreateHoldInput{AccountID: accountID.String(), Currency: string(money.BRL), Origin: "origin", Reference: "history-error", Type: hold.Judicial, Requested: requested}
+
+				result, err := sut.Execute(context.Background(), input)
+
+				Expect(result).To(BeNil())
+				Expect(errors.Is(err, cause)).To(BeTrue())
+				Expect(repo.saved).NotTo(BeNil())
+				Expect(repo.history).To(BeEmpty())
+			})
+			It("should return an outbox persistence error after recording the instruction and history", func() {
+				requested, _ := money.NewMoney(500, money.BRL)
+				accountID, err := entity.NewIDV7()
+				Expect(err).NotTo(HaveOccurred())
+				cause := errors.New("outbox write failed")
+				repo := &holdRepositoryFake{}
+				sut := newCreateHoldCommand(repo, &account.Account{ID: accountID, Currency: money.BRL}, holdTransactionRepoFake{}, nil, holdOutboxRepoFake{err: cause})
+				input := dto.CreateHoldInput{AccountID: accountID.String(), Currency: string(money.BRL), Origin: "origin", Reference: "outbox-error", Type: hold.Judicial, Requested: requested}
+
+				result, err := sut.Execute(context.Background(), input)
+
+				Expect(result).To(BeNil())
+				Expect(errors.Is(err, cause)).To(BeTrue())
+				Expect(repo.saved).NotTo(BeNil())
+				Expect(repo.history).To(HaveLen(1))
+			})
 			It("should reject an identity replay with a different fingerprint", func() {
 				requested, err := money.NewMoney(500, money.BRL)
 				Expect(err).NotTo(HaveOccurred())
@@ -211,6 +429,14 @@ var _ = Describe("INTERNAL :: APPLICATION :: COMMAND :: CREATE HOLD", func() {
 		})
 	})
 })
+
+func newCreateHoldCommand(repo *holdRepositoryFake, accountEntity *account.Account, transactions transaction.Repository, policy command.HoldPolicyProvider, outboxRepo outbox.Repository) *command.CreateHold {
+	return command.NewCreateHold(
+		holdUOW{}, holdAccountRepoFake{value: accountEntity}, transactions,
+		repo, policy, outboxRepo,
+		adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{},
+	)
+}
 
 var _ = Describe("INTERNAL :: APPLICATION :: COMMAND :: RELEASE HOLD", func() {
 	Describe("#Execute", func() {
@@ -301,6 +527,122 @@ var _ = Describe("INTERNAL :: APPLICATION :: COMMAND :: RELEASE HOLD", func() {
 				Expect(result).To(BeNil())
 				Expect(err).To(MatchError(hold.ErrInvalidRelease))
 				Expect(instruction.Released.Amount()).To(BeZero())
+			})
+			It("should reject invalid release input before opening a transaction", func() {
+				sut := command.NewReleaseHold(holdUOW{}, &holdRepositoryFake{}, &releaseOutboxFake{}, adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{})
+
+				result, err := sut.Execute(context.Background(), dto.ReleaseHoldInput{})
+
+				Expect(result).To(BeNil())
+				Expect(err).To(MatchError(hold.ErrInvalidRelease))
+			})
+			It("should reject a release when its hold cannot be found", func() {
+				amount, _ := money.NewMoney(100, money.BRL)
+				sut := command.NewReleaseHold(holdUOW{}, &holdRepositoryFake{}, &releaseOutboxFake{}, adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{})
+
+				result, err := sut.Execute(context.Background(), dto.ReleaseHoldInput{HoldID: "missing", IdempotencyKey: "release", AuthorizationReference: "auth", Amount: amount})
+
+				Expect(result).To(BeNil())
+				Expect(err).To(MatchError(ContainSubstring(hold.ErrInvalidRelease.Error())))
+			})
+			It("should preserve repository errors when recording a release", func() {
+				allocated, _ := money.NewMoney(1000, money.BRL)
+				zero, _ := money.NewMoney(0, money.BRL)
+				amount, _ := money.NewMoney(400, money.BRL)
+				cause := errors.New("release insert failed")
+				instruction := &hold.Instruction{ID: "hold-1", Requested: allocated, Allocated: allocated, Pending: zero, Released: zero, Status: hold.StatusAllocated}
+				repo := &holdRepositoryFake{byID: instruction, saveReleaseErr: cause}
+				sut := command.NewReleaseHold(holdUOW{}, repo, &releaseOutboxFake{}, adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{})
+
+				result, err := sut.Execute(context.Background(), dto.ReleaseHoldInput{HoldID: "hold-1", IdempotencyKey: "release", AuthorizationReference: "auth", Amount: amount})
+
+				Expect(result).To(BeNil())
+				Expect(errors.Is(err, cause)).To(BeTrue())
+			})
+			It("should reject a repeated release key with a different request fingerprint", func() {
+				allocated, _ := money.NewMoney(1000, money.BRL)
+				zero, _ := money.NewMoney(0, money.BRL)
+				amount, _ := money.NewMoney(400, money.BRL)
+				instruction := &hold.Instruction{ID: "hold-1", Requested: allocated, Allocated: allocated, Pending: zero, Released: zero, Status: hold.StatusAllocated}
+				repo := &holdRepositoryFake{byID: instruction}
+				sut := command.NewReleaseHold(holdUOW{}, repo, &releaseOutboxFake{holdOutboxRepoFake: holdOutboxRepoFake{err: errors.New("outbox failed")}}, adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{})
+				input := dto.ReleaseHoldInput{HoldID: "hold-1", IdempotencyKey: "release", AuthorizationReference: "auth", Amount: amount}
+
+				_, err := sut.Execute(context.Background(), input)
+				Expect(err).To(HaveOccurred())
+				// A different payload under the same key is rejected after the failed attempt.
+				repo.release = &hold.Release{RequestFingerprint: "different"}
+				input.AuthorizationReference = "other-auth"
+				result, err := sut.Execute(context.Background(), input)
+
+				Expect(result).To(BeNil())
+				Expect(err).To(MatchError(hold.ErrReleaseConflict))
+			})
+			It("should propagate a release lookup error", func() {
+				amount, _ := money.NewMoney(100, money.BRL)
+				cause := errors.New("release lookup failed")
+				repo := &holdRepositoryFake{findReleaseErr: cause}
+				sut := command.NewReleaseHold(holdUOW{}, repo, &releaseOutboxFake{}, adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{})
+
+				result, err := sut.Execute(context.Background(), dto.ReleaseHoldInput{HoldID: "hold-1", IdempotencyKey: "release", AuthorizationReference: "auth", Amount: amount})
+
+				Expect(result).To(BeNil())
+				Expect(errors.Is(err, cause)).To(BeTrue())
+			})
+			It("should propagate a hold lookup error", func() {
+				amount, _ := money.NewMoney(100, money.BRL)
+				cause := errors.New("hold lookup failed")
+				repo := &holdRepositoryFake{findByIDErr: cause}
+				sut := command.NewReleaseHold(holdUOW{}, repo, &releaseOutboxFake{}, adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{})
+
+				result, err := sut.Execute(context.Background(), dto.ReleaseHoldInput{HoldID: "hold-1", IdempotencyKey: "release", AuthorizationReference: "auth", Amount: amount})
+
+				Expect(result).To(BeNil())
+				Expect(errors.Is(err, cause)).To(BeTrue())
+			})
+			It("should propagate an instruction update error", func() {
+				allocated, _ := money.NewMoney(1000, money.BRL)
+				zero, _ := money.NewMoney(0, money.BRL)
+				amount, _ := money.NewMoney(400, money.BRL)
+				cause := errors.New("hold update failed")
+				instruction := &hold.Instruction{ID: "hold-1", Requested: allocated, Allocated: allocated, Pending: zero, Released: zero, Status: hold.StatusAllocated}
+				repo := &holdRepositoryFake{byID: instruction, updateErr: cause}
+				sut := command.NewReleaseHold(holdUOW{}, repo, &releaseOutboxFake{}, adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{})
+
+				result, err := sut.Execute(context.Background(), dto.ReleaseHoldInput{HoldID: "hold-1", IdempotencyKey: "release", AuthorizationReference: "auth", Amount: amount})
+
+				Expect(result).To(BeNil())
+				Expect(errors.Is(err, cause)).To(BeTrue())
+			})
+			It("should propagate a release history write error", func() {
+				allocated, _ := money.NewMoney(1000, money.BRL)
+				zero, _ := money.NewMoney(0, money.BRL)
+				amount, _ := money.NewMoney(400, money.BRL)
+				cause := errors.New("history write failed")
+				instruction := &hold.Instruction{ID: "hold-1", Requested: allocated, Allocated: allocated, Pending: zero, Released: zero, Status: hold.StatusAllocated}
+				repo := &holdRepositoryFake{byID: instruction, historyErr: cause}
+				sut := command.NewReleaseHold(holdUOW{}, repo, &releaseOutboxFake{}, adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{})
+
+				result, err := sut.Execute(context.Background(), dto.ReleaseHoldInput{HoldID: "hold-1", IdempotencyKey: "release", AuthorizationReference: "auth", Amount: amount})
+
+				Expect(result).To(BeNil())
+				Expect(errors.Is(err, cause)).To(BeTrue())
+			})
+			It("should propagate an outbox write error after recording the release", func() {
+				allocated, _ := money.NewMoney(1000, money.BRL)
+				zero, _ := money.NewMoney(0, money.BRL)
+				amount, _ := money.NewMoney(400, money.BRL)
+				cause := errors.New("outbox write failed")
+				instruction := &hold.Instruction{ID: "hold-1", Requested: allocated, Allocated: allocated, Pending: zero, Released: zero, Status: hold.StatusAllocated}
+				repo := &holdRepositoryFake{byID: instruction}
+				box := &releaseOutboxFake{holdOutboxRepoFake: holdOutboxRepoFake{err: cause}}
+				sut := command.NewReleaseHold(holdUOW{}, repo, box, adaptermocks.SilentTracerMock{}, adaptermocks.SilentLoggerMock{}, adaptermocks.SilentMetricsMock{})
+
+				result, err := sut.Execute(context.Background(), dto.ReleaseHoldInput{HoldID: "hold-1", IdempotencyKey: "release", AuthorizationReference: "auth", Amount: amount})
+
+				Expect(result).To(BeNil())
+				Expect(errors.Is(err, cause)).To(BeTrue())
+				Expect(box.saved).NotTo(BeNil())
 			})
 		})
 	})
