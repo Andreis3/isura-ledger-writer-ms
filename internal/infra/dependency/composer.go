@@ -4,6 +4,7 @@ import (
 	"github.com/andreis3/isura-ledger-ms/internal/domain/account"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/balance"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/event"
+	"github.com/andreis3/isura-ledger-ms/internal/domain/hold"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/outbox"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/transaction"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/nats"
@@ -48,6 +49,14 @@ func (c *Composer) BuildOutboxRepo() outbox.Repository {
 func (c *Composer) BuildBalance() balance.Repository {
 	return observability.NewObservabilityBalanceRepo(
 		repository.NewBalanceRepository(c.deps.Pg),
+		c.deps.Prom,
+		c.deps.Tracer,
+	)
+}
+
+func (c *Composer) BuildHoldRepo() hold.Repository {
+	return observability.NewObservabilityHoldRepo(
+		repository.NewHoldRepository(c.deps.Pg),
 		c.deps.Prom,
 		c.deps.Tracer,
 	)

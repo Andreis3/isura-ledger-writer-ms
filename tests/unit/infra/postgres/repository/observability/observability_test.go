@@ -11,6 +11,7 @@ import (
 	"github.com/andreis3/isura-ledger-ms/internal/domain/account"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/balance"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/entity"
+	domainhold "github.com/andreis3/isura-ledger-ms/internal/domain/hold"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/outbox"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/transaction"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/postgres/repository/criteria"
@@ -75,6 +76,13 @@ func (f transactionRepoFake) ExistsByIdempotencyKey(context.Context, string) (bo
 }
 
 type outboxRepoFake struct{ err error }
+
+type holdRepoFake struct {
+	domainhold.Repository
+	err error
+}
+
+func (f holdRepoFake) Save(context.Context, *domainhold.Instruction) error { return f.err }
 
 func (f outboxRepoFake) Save(context.Context, *outbox.Outbox) error { return f.err }
 func (f outboxRepoFake) ClaimPending(context.Context, int, int, time.Duration) ([]*outbox.Outbox, error) {
@@ -246,6 +254,18 @@ var _ = Describe("INTERNAL :: INFRA :: POSTGRES :: REPOSITORY :: OBSERVABILITY",
 				Expect(err).NotTo(HaveOccurred())
 				Expect(sut.UpdateOutboxData(context.Background(), id, outbox.UpdateOutboxData{})).To(MatchError(wantErr))
 			})
+		})
+	})
+	Describe("HoldRepository.Save", func() {
+		It("should record query duration and return repository failures", func() {
+			wantErr := errors.New("hold save failed")
+			metrics := &metricsRecorder{}
+			sut := observability.NewObservabilityHoldRepo(holdRepoFake{err: wantErr}, metrics, adapter.SilentTracerMock{})
+
+			err := sut.Save(context.Background(), nil)
+
+			Expect(err).To(MatchError(wantErr))
+			Expect(metrics.calls).To(Equal(1))
 		})
 	})
 })

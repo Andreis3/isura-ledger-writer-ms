@@ -6,8 +6,10 @@ import (
 	"errors"
 	"time"
 
+	"github.com/andreis3/isura-ledger-ms/internal/domain/entity"
 	domainhold "github.com/andreis3/isura-ledger-ms/internal/domain/hold"
 	"github.com/andreis3/isura-ledger-ms/internal/domain/money"
+	"github.com/andreis3/isura-ledger-ms/internal/domain/outbox"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/postgres/database"
 	"github.com/andreis3/isura-ledger-ms/internal/infra/postgres/repository"
 	"github.com/google/uuid"
@@ -119,6 +121,35 @@ var _ = Describe("INTERNAL :: INFRA :: POSTGRES :: REPOSITORY :: HOLD", func() {
 				Expect(sut.SaveRelease(txContext, release)).To(MatchError(ContainSubstring("conflicts with existing release")))
 			})
 		})
+	})
+})
+
+var _ = Describe("INTERNAL :: INFRA :: POSTGRES :: REPOSITORY :: HOLD OUTBOX ATOMICITY", func() {
+	It("should roll back hold and history when the outbox event cannot be saved", func() {
+		accountID := insertAccountV7(ctx, tx)
+		instruction := allocatedHold(accountID, "atomic-origin", "atomic-reference")
+		holdRepo := repository.NewHoldRepository(pool)
+		outboxRepo := repository.NewOutBoxRepository(pool)
+		txContext := database.WithTx(ctx, tx)
+		Expect(holdRepo.Save(txContext, instruction)).To(Succeed())
+		history := domainhold.History{ID: newIDV7(), HoldID: instruction.ID, EventType: "DECISION_RECORDED",
+			Requested: instruction.Requested, AllocatedDelta: instruction.Allocated,
+			Pending: instruction.Pending, ReleasedDelta: amount(0, money.BRL), CreatedAt: time.Now().UTC()}
+		Expect(holdRepo.SaveHistory(txContext, history)).To(Succeed())
+		invalidID, err := entity.NewIDV7()
+		Expect(err).NotTo(HaveOccurred())
+		invalidOutbox := &outbox.Outbox{ID: invalidID, AggregateID: instruction.ID,
+			AggregateType: outbox.Hold, EventType: outbox.HoldEvaluated,
+			Status: "INVALID", CreatedAt: time.Now().UTC()}
+		Expect(outboxRepo.Save(txContext, invalidOutbox)).To(HaveOccurred())
+		Expect(tx.Rollback(ctx)).To(Succeed())
+		tx = nil
+
+		var holds, histories int
+		Expect(pool.QueryRow(ctx, `SELECT count(*) FROM holds WHERE origin=$1 AND reference=$2`, instruction.Origin, instruction.Reference).Scan(&holds)).To(Succeed())
+		Expect(pool.QueryRow(ctx, `SELECT count(*) FROM hold_history WHERE hold_id=$1`, instruction.ID).Scan(&histories)).To(Succeed())
+		Expect(holds).To(BeZero())
+		Expect(histories).To(BeZero())
 	})
 })
 

@@ -24,12 +24,14 @@ type StatusOutbox string
 
 const (
 	Transaction AggregateType = "TRANSACTION"
+	Hold        AggregateType = "HOLD"
 )
 
 const (
 	TransactionCreated EventType = "ledger.transaction.created"
 	BalanceUpdated     EventType = "ledger.balance.updated"
 	EntryCreated       EventType = "ledger.entry.created"
+	HoldEvaluated      EventType = "ledger.hold.evaluated"
 )
 
 const (
@@ -242,6 +244,8 @@ func (a AggregateType) IsValid() bool {
 	switch a {
 	case Transaction:
 		return true
+	case Hold:
+		return true
 	}
 	return false
 }
@@ -291,7 +295,7 @@ func (s StatusOutbox) IsValid() bool {
 
 func (e EventType) IsValid() bool {
 	switch e {
-	case TransactionCreated, BalanceUpdated, EntryCreated:
+	case TransactionCreated, BalanceUpdated, EntryCreated, HoldEvaluated:
 		return true
 	}
 	return false
