@@ -12,6 +12,12 @@ type CreateHoldInput struct {
 	Requested                              money.Money
 }
 
+// ReleaseHoldInput is an internally authorized request to release retained funds.
+type ReleaseHoldInput struct {
+	HoldID, IdempotencyKey, AuthorizationReference string
+	Amount                                         money.Money
+}
+
 func (d CreateHoldInput) CreateHoldFacade() (*hold.Instruction, error) {
 	id, err := entity.NewIDV7()
 	if err != nil {

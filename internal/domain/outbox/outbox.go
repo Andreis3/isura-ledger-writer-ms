@@ -32,6 +32,7 @@ const (
 	BalanceUpdated     EventType = "ledger.balance.updated"
 	EntryCreated       EventType = "ledger.entry.created"
 	HoldEvaluated      EventType = "ledger.hold.evaluated"
+	HoldReleased       EventType = "ledger.hold.released"
 )
 
 const (
@@ -295,7 +296,7 @@ func (s StatusOutbox) IsValid() bool {
 
 func (e EventType) IsValid() bool {
 	switch e {
-	case TransactionCreated, BalanceUpdated, EntryCreated, HoldEvaluated:
+	case TransactionCreated, BalanceUpdated, EntryCreated, HoldEvaluated, HoldReleased:
 		return true
 	}
 	return false
