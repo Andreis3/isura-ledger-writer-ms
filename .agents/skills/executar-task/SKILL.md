@@ -11,7 +11,7 @@ Uma tarefa é uma **entrega incremental**, com dependências explícitas e teste
 ## Fluxo
 
 1. **Selecionar a tarefa** — identifique a próxima tarefa não concluída no `tasks.md`; abra o arquivo `task_[num].md` correspondente e leia sua definição, subtarefas (`[num].1`, `[num].2`…), critérios de aceitação relacionados e testes.
-   **Conclua quando:** a próxima tarefa e todas as suas subtarefas estiverem identificadas.
+   **Conclua quando:** a próxima tarefa e todas as suas subtarefas estiverem identificadas e seu estado de execução e gates impeditivos tiverem sido verificados.
 
 2. **Preparar** — leia o `AGENTS.md` e todas as rules em `.agents/rules/`; revise o contexto do PRD e os requisitos da TechSpec para a tarefa; entenda as dependências de tarefas anteriores; carregue somente as skills aplicáveis do projeto em `.agents/skills/` e consulte na web a documentação das bibliotecas envolvidas quando necessário.
    Quando a tarefa exigir a execução da aplicação, prepare um ambiente isolado para a worktree: use uma porta disponível na faixa `30**` (por exemplo, `3000–3099`) para o backend, uma porta disponível na faixa `51**` (por exemplo, `5100–5199`) para o frontend e uma faixa própria para cada banco ou serviço adicional. Verifique cada porta antes de iniciar o processo; se estiver ocupada, escolha outra dentro da faixa. Configure as URLs entre os serviços, registre as portas e os processos iniciados e suba somente os serviços necessários.
@@ -60,3 +60,12 @@ Uma tarefa é uma **entrega incremental**, com dependências explícitas e teste
 **Autônomo: somente quando o usuário solicitar expressamente esse modo para a execução atual.** Permita concluir sem a aprovação intermediária apenas mudanças pequenas, reversíveis e sem impacto em saldo, entries, políticas contábeis, idempotência, UoW, outbox, schema financeiro, segurança, contratos públicos ou produção. O modo autônomo não dispensa nenhum teste, não altera escopo e não autoriza commit, push, deploy ou merge sem a respectiva autorização. Se surgir impacto crítico, falha ou dúvida de negócio, retorne ao modo supervisionado e solicite decisão.
 
 Para tarefas financeiras, consulte `../ledger-quality-gates/SKILL.md`, mapeie `INV-*` aos testes e registre evidências reais de integração/concorrência. Não marque como concluído item sem evidência de validação; informe explicitamente testes que não puderam ser executados e mantenha a tarefa bloqueada quando afetarem uma garantia crítica.
+
+
+## Respeitar gates de implementação definidos no planejamento
+
+Antes de selecionar ou executar uma tarefa, consulte os estados e `GATE-*` em `tasks.md` e em `task_[num].md`. **Não execute uma tarefa BLOQUEADA**, mesmo se o usuário pedir apenas para continuar a próxima tarefa; informe o gate, a evidência necessária e a tarefa preparatória correspondente. Se existir uma tarefa `PRONTA` independente, proponha-a ou selecione-a conforme o pedido e as dependências.
+
+Uma tarefa preparatória pode criar proposta de catálogo, revisar TechSpec ou reunir evidência para aprovação, mas **não pode decidir unilateralmente política de produto, autorização, canal privilegiado ou novos casos de teste críticos como se já estivessem aprovados**. A conclusão da tarefa preparatória não altera automaticamente `GATE-*` para `RESOLVIDO`. Antes de desbloquear implementação dependente, verifique a decisão documentada, o responsável/aprovação requerida e os testes agora identificados na TechSpec.
+
+Se os arquivos antigos não contiverem campo de gate, verifique diretamente as restrições do PRD e TechSpec; ausência de campo não significa ausência de bloqueio. O modo autônomo nunca contorna gates.
