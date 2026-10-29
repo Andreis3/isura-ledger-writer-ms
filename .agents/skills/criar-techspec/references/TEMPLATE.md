@@ -256,3 +256,20 @@ Defina a estratégia de testes aplicável à funcionalidade e nomeie cada caso c
 ### Arquivos relevantes e dependentes
 
 [Liste os arquivos relevantes e dependentes.]
+
+
+## Matriz de invariantes e garantias (obrigatória quando há impacto financeiro)
+
+| Invariante | Requisito / critério | Estado inicial e operação | Garantia observável | Proteção técnica | Testes | Evidência esperada |
+|---|---|---|---|---|---|---|
+| INV-01 | RF-01 / CA-01 | [cenário] | [resultado] | [domínio, transação, constraint] | TI-01 | [assertiva] |
+
+Não invente IDs: use os do PRD. Invariantes estritamente técnicas adicionais devem ser identificadas e justificadas. Para mudanças sem impacto financeiro: **Não aplicável — [motivo]**.
+
+### Matriz de modos de falha
+
+| Falha / concorrência | Efeito permitido | Efeito proibido | Estratégia de recuperação | Caso de teste |
+|---|---|---|---|---|
+| [ex.: disputa pela mesma sequência] | [rollback e retry limitado] | [duplo débito] | [reler e recalcular transação inteira] | TI-02 |
+
+Considerar quando aplicável: disputa concorrente, mesmo/diferente fingerprint, erro pré-COMMIT, resposta perdida pós-COMMIT, broker indisponível, retry esgotado, overflow e replay/reconciliação. Os cenários não aplicáveis devem ter justificativa.
