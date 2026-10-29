@@ -22,3 +22,8 @@ Cada tarefa é uma **entrega incremental**, com escopo claro, dependências expl
       **Conclua quando:** cada critério de aceitação e caso de teste do inventário estiver mapeado em uma ou mais tarefas, e os testes de cada tarefa corresponderem aos casos definidos na TechSpec.
 
 4. **Reportar** — apresente os arquivos gerados e aguarde a confirmação do usuário antes de iniciar qualquer implementação.
+
+
+## Gate de cobertura de invariantes
+
+Ao inventariar o PRD e a TechSpec, inclua `INV-*` além de `RF-*`, `CA-*` e `TU-*`/`TI-*`/`E2E-*`. Cada invariante afetada deve aparecer em pelo menos uma tarefa que implemente sua proteção e outra atividade de verificação (podem estar na mesma tarefa, mas com subtarefas distintas). Inclua testes de concorrência, persistência e falha para garantias financeiras; mocks isolados não demonstram atomicidade real. Se a TechSpec não cobrir uma invariante crítica, não produza tasks como se estivesse resolvida: reporte a lacuna e solicite correção na TechSpec.

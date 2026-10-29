@@ -52,3 +52,12 @@ O QA só estará **APROVADO** quando todos os critérios de aceitação do PRD t
    **Conclua quando:** o `qa.md` estiver gerado conforme o template e atualizado com os resultados finais.
 
 10. **Encerrar o ambiente** — desligue todos os serviços iniciados por esta execução, encerre os processos de forma graciosa e confirme que as portas, bancos temporários, containers e demais recursos foram liberados. Não encerre processos pertencentes a outra worktree ou ao usuário. Faça essa limpeza também se o QA for interrompido, bloqueado ou reprovado.
+
+
+## Perfil de QA por tipo de sistema — prevalece sobre passos genéricos de UI
+
+Antes de preparar o ambiente, classifique a funcionalidade como `backend-financeiro`, `backend-api`, `mensageria/worker`, `frontend` ou combinação. Determine os testes pelo fluxo real da funcionalidade. **Não suba navegador, frontend, nem exija acessibilidade, screenshots ou responsividade quando não houver interface visual.** Nesses casos, os passos de navegador/acessibilidade/responsividade acima são `NÃO APLICÁVEL — serviço sem UI` e a evidência principal será de comandos, asserts, logs sanitizados, queries de verificação e resultados de testes.
+
+Para `backend-financeiro`, aplique `../ledger-quality-gates/SKILL.md` e o guia `../golang/references/ledger-engineering-guide.md`. Execute testes com PostgreSQL real/isolado quando o contrato depender de constraints, SERIALIZABLE, concorrência, UoW ou outbox. Não substitua esses testes por mocks. Cubra as `INV-*` afetadas e confirme, conforme aplicabilidade: duas operações concorrentes não confirmam gasto duplo, replay da chave idempotente é seguro, fingerprint divergente gera conflito, falhas parciais não deixam entries órfãs, sequence_number e running_balance reconciliam, outbox acompanha o COMMIT. Teste de entrega externa de mensagem deve considerar duplicação/retry; não exija exactly-once de transporte.
+
+O relatório `qa.md` deve conter o perfil identificado, matriz `CA-* / INV-* / teste / evidência / status`, limites do ambiente e causas de bloqueio. **APROVADO** requer todas as invariantes afetadas verificadas e todos os testes obrigatórios aplicáveis passando. Quando evidência crítica não puder ser obtida, marque **BLOQUEADO** ou **REPROVADO**, nunca aprovado.

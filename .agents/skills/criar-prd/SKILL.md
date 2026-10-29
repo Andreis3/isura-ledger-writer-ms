@@ -132,3 +132,12 @@ Informe ao usuário:
 - caminho do arquivo criado;
 - nome da funcionalidade;
 - resumo de uma linha do escopo definido.
+
+
+## Regras de negócio e invariantes observáveis
+
+Para funcionalidades financeiras, identifique as garantias de negócio que **não podem ser violadas**, sem antecipar mecanismos de implementação. Use identificadores estáveis `INV-*` e relacione cada invariante aos requisitos `RF-*` e critérios `CA-*` relevantes.
+
+Exemplos de comportamento de produto: uma solicitação lógica não pode gerar duas operações financeiras; uma operação rejeitada não pode produzir movimentação parcial; contas com política de não negatividade não podem confirmar saldo negativo. Confirme a semântica de débito/crédito conforme o tipo de conta antes de formular exemplos.
+
+Cada `INV-*` deve definir: enunciado observável, escopo/condições, casos de borda e `CA-*` associado. Não imponha SQL, isolamento, constraints ou algoritmos no PRD: a TechSpec escolhe o mecanismo. Não invente invariantes de negócio que o produto não confirmou. Marque ambiguidade crítica como bloqueio a resolver antes da implementação.

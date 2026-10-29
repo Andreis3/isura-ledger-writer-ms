@@ -45,3 +45,17 @@ Confira as regras do projeto e a TechSpec antes de apontar qualquer problema. Ex
    **Conclua quando:** o `codereview.md` estiver salvo conforme o template, com o veredito registrado.
 
 8. **Encerrar o ambiente** — desligue todos os serviços iniciados por esta execução, encerre os processos de forma graciosa e confirme que as portas, bancos temporários, containers e demais recursos foram liberados. Não encerre processos pertencentes a outra worktree ou ao usuário. Faça essa limpeza também se a revisão for interrompida, bloqueada ou reprovada.
+
+
+## Modos de review e critérios de veredito
+
+**Modo padrão: auditoria somente leitura.** Identifique problemas, classifique severidade, registre evidência e recomende correção, sem alterar código. Use **modo correção** somente quando o usuário pedir explicitamente para corrigir, preservando a etapa de revalidação. A auditoria nunca deve declarar que executou testes que não executou.
+
+Classifique os achados em `BLOQUEADOR`, `ALTO`, `MÉDIO` e `BAIXO`; documente arquivo/trecho, cenário de falha, impacto, evidência e recomendação.
+
+- **APROVADO:** todos os testes obrigatórios aplicáveis passaram, requisitos e invariantes preservados, nenhum bloqueador ou achado alto.
+- **APROVADO COM RESSALVAS:** todos os testes obrigatórios aplicáveis passaram, nenhuma invariante afetada sem comprovação, somente achados médios/baixos não bloqueantes claramente documentados.
+- **REPROVADO:** qualquer violação financeira, segurança crítica, divergência substancial da TechSpec, teste obrigatório falhando ou evidência de integridade insuficiente.
+- **BLOQUEADO:** não foi possível executar validação obrigatória por limitação do ambiente ou dependência externa; não confunda ausência de evidência com aprovação.
+
+O item inicial que afirma que apenas todos os testes passando permite aprovação aplica-se também à aprovação **com ressalvas**. Para componentes do ledger, consulte `../ledger-quality-gates/SKILL.md` e revise explicitamente `INV-*`, retries por SQLSTATE/constraint, COMMIT/outbox, idempotência, recomputação de saldo e cenários de concorrência.

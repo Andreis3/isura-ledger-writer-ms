@@ -36,3 +36,22 @@ As evidências da ferramenta de navegador devem estar salvas em `tasks/prd-[slug
 
 ## Conclusão
 [Parecer final do QA]
+
+
+## Perfil e invariantes
+
+- Perfil validado: backend-financeiro / backend-api / mensageria-worker / frontend / combinado
+- Recursos usados: [PostgreSQL, broker, HTTP, browser, conforme aplicável]
+- Fluxos de UI: [APLICÁVEL / NÃO APLICÁVEL — serviço sem UI]
+
+| Invariante | Critério de aceitação | Caso de teste | Resultado | Evidência verificável |
+|---|---|---|---|---|
+| INV-01 | CA-01 | TI-01 | PASSOU / FALHOU / BLOQUEADO | [assertiva, log sanitizado, relatório] |
+
+## Falhas e concorrência
+
+| Cenário | Resultado esperado | Resultado observado | Teste | Evidência |
+|---|---|---|---|---|
+| [concorrência, retry, pós-COMMIT, reconciliação, se aplicável] | [garantia] | [resultado] | TI-02 | [evidência] |
+
+Em serviços sem UI, as seções de acessibilidade, responsividade e evidências de navegador devem ser marcadas **Não aplicável — serviço sem interface visual**. Não invente screenshots.

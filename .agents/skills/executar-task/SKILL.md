@@ -51,3 +51,12 @@ Uma tarefa é uma **entrega incremental**, com dependências explícitas e teste
 
 6. **Concluir e limpar** — marque como concluídas (`[x]`) todas as subtarefas e os testes aplicáveis no arquivo `task_[num].md`. Depois, marque a tarefa como concluída (`[x]`) no `tasks.md`, informe, em uma linha, o que foi implementado e desligue todos os serviços iniciados por esta execução. Encerre os processos de forma graciosa, confirme que as portas foram liberadas e não encerre processos pertencentes a outra worktree ou ao usuário. Faça essa limpeza também se a execução for interrompida ou bloqueada.
    **Conclua quando:** todas as subtarefas e os testes aplicáveis estiverem marcados no arquivo da tarefa, e a tarefa estiver marcada como concluída no `tasks.md`.
+
+
+## Modos de execução e limites de autonomia
+
+**Padrão: supervisionado.** Preserve o passo de revisão e aprovação explícita do desenvolvedor antes de marcar a task como concluída.
+
+**Autônomo: somente quando o usuário solicitar expressamente esse modo para a execução atual.** Permita concluir sem a aprovação intermediária apenas mudanças pequenas, reversíveis e sem impacto em saldo, entries, políticas contábeis, idempotência, UoW, outbox, schema financeiro, segurança, contratos públicos ou produção. O modo autônomo não dispensa nenhum teste, não altera escopo e não autoriza commit, push, deploy ou merge sem a respectiva autorização. Se surgir impacto crítico, falha ou dúvida de negócio, retorne ao modo supervisionado e solicite decisão.
+
+Para tarefas financeiras, consulte `../ledger-quality-gates/SKILL.md`, mapeie `INV-*` aos testes e registre evidências reais de integração/concorrência. Não marque como concluído item sem evidência de validação; informe explicitamente testes que não puderam ser executados e mantenha a tarefa bloqueada quando afetarem uma garantia crítica.
