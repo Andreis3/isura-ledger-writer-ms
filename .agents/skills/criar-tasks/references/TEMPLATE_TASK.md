@@ -55,3 +55,14 @@
 ## Arquivos relevantes
 
 - [Liste os arquivos relevantes para esta tarefa.]
+
+## Estado de execução e gates
+
+- Estado: PRONTA / BLOQUEADA / CONCLUÍDA
+- Depende de: [tarefas anteriores ou nenhuma]
+- Gates impeditivos: [GATE-* ou nenhum]
+- Decisão/evidência pendente: [descrição e fonte, se aplicável]
+- Responsável pela resolução: [responsável conhecido ou a definir]
+- Condição objetiva de desbloqueio: [aprovação/documento/teste definido, se aplicável]
+
+**Regra:** a existência desta task não autoriza implementar enquanto houver gates impeditivos pendentes. Tarefas preparatórias podem apenas produzir proposta, documentação ou validação dentro do escopo aprovado; não podem substituir aprovação de produto/segurança. Quando faltar um teste na TechSpec, registre a pendência sem inventar ID ou resultado, e bloqueie a tarefa implementadora dependente.
