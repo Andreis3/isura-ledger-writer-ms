@@ -750,3 +750,14 @@ criar-tasks
   ↓
 tasks
 ```
+
+
+## Gate obrigatório de integridade e rastreabilidade
+
+Quando a funcionalidade modificar saldo, conta, transaction, entries, sequenciamento, idempotência, UoW, outbox ou eventos financeiros, carregue `../golang/references/ledger-engineering-guide.md` e aplique `../ledger-quality-gates/SKILL.md`.
+
+Crie na TechSpec uma matriz de rastreabilidade com `RF-*`, `CA-*`, `INV-*`, mecanismo de proteção, `TU-*`/`TI-*`/`E2E-*` quando aplicável, e responsável pelo teste. Reutilize IDs existentes do PRD. Se uma invariante técnica crítica não possuir `INV-*` no PRD, registre-a como garantia técnica identificada na TechSpec; não altere silenciosamente o produto.
+
+Para cada garantia financeira, especifique condição inicial, sequência de ações, resultado confirmado, comportamento em concorrência e recuperação após falha. Inclua pelo menos os cenários relevantes: operações simultâneas na mesma conta, duplicação de idempotency key com mesmo/diferente fingerprint, falha antes/depois do COMMIT, outbox indisponível após COMMIT, exaustão de retry, overflow e reconstrução/reconciliação. Marque `não aplicável` com justificativa para cenários fora do escopo.
+
+A TechSpec só está pronta para decomposição quando cada invariante afetada tiver mecanismo e validação associados. Não confunda atomicidade de outbox no banco com entrega exatamente uma vez no broker. Verifique e documente o limite atual de duas entries somente para as operações que efetivamente o exigem, não como regra universal de partidas dobradas.
